@@ -236,6 +236,8 @@ fn snapshot_pages(window: &adw::ApplicationWindow, dir: std::path::PathBuf) {
     let window = window.clone();
     glib::timeout_add_local_once(std::time::Duration::from_millis(2500), move || {
         let ids: Vec<&'static str> = pages::all().iter().map(|p| p.id).collect();
+        let (min, nat) = window.preferred_size();
+        tracing::info!("window min {}x{} natural {}x{}", min.width(), min.height(), nat.width(), nat.height());
         let stack = find_stack(window.upcast_ref()).expect("no stack");
         let nav = find_nav(window.upcast_ref());
         let mut i = 0usize;

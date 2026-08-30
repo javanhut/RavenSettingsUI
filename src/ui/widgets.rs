@@ -150,6 +150,12 @@ pub fn dim_label(text: &str) -> gtk::Label {
     l.add_css_class("dim");
     l.set_xalign(0.0);
     l.set_wrap(true);
+    l.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    // Without this a wrapping label still reports its full single-line text
+    // as its natural width, which inflates the window past the screen.
+    l.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+    l.set_max_width_chars(60);
+    l.set_hexpand(true);
     l
 }
 

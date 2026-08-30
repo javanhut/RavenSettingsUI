@@ -112,8 +112,16 @@ pub fn build(gtk_app: &adw::Application, app: &Rc<App>) -> adw::ApplicationWindo
     toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&stack));
 
+    // The sidebar scrolls rather than dictating the window's height: its
+    // natural height (title + cards + every nav row) is taller than a
+    // laptop panel, and GTK opens a window at its natural size.
+    let sidebar_scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_height(false)
+        .child(&sidebar)
+        .build();
     let split = adw::OverlaySplitView::builder()
-        .sidebar(&sidebar)
+        .sidebar(&sidebar_scroller)
         .content(&toolbar)
         .sidebar_width_fraction(0.25)
         .min_sidebar_width(230.0)
@@ -157,6 +165,9 @@ pub fn build(gtk_app: &adw::Application, app: &Rc<App>) -> adw::ApplicationWindo
     window.set_content(Some(&app.toasts));
     // Small enough to live in a quarter-screen tile; the pages scroll.
     window.set_size_request(480, 360);
+    // Open at a size that fits a laptop panel; without this GTK would use the
+    // natural size of the content instead.
+    window.set_default_size(960, 640);
 
     // Ctrl+F focuses search.
     let ctrl = gtk::ShortcutController::new();
