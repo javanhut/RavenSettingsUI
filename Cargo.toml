@@ -1,0 +1,40 @@
+[package]
+name = "raven-settings"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "System settings for Raven Linux: network, Bluetooth, sound, display, appearance, default apps and updates in one window"
+repository = "https://github.com/javanhut/RavenSettingsUI"
+
+[[bin]]
+name = "raven-settings"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned to the same gtk-rs generation as RavenFileManager so both apps resolve
+# one set of bindings. v4_12 / v1_4 are the floors that ship on the image.
+gtk4 = { version = "0.10", features = ["v4_12"] }
+libadwaita = { version = "0.8", features = ["v1_5"] }
+glib = "0.21"
+gio = "0.21"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# BlueZ. Blocking API on its own thread, like Huginn and RoostBar do it: the
+# GTK main loop owns no async runtime and should not gain one for this.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+# raven_shell_v1 client bindings, generated from the vendored XML so this repo
+# builds standalone without a path dependency on RavenGUI.
+wayland-client = "0.31"
+wayland-backend = "0.3"
+wayland-scanner = "0.31"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

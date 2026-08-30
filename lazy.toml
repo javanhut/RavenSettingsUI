@@ -1,0 +1,34 @@
+# Raven Settings' build interface for imlazy. Mirrors the Makefile.
+
+[settings]
+default = "build"
+
+[commands.build]
+desc = "Build, optimised"
+run = ["cargo build --locked --release"]
+alias = ["b"]
+
+[commands.run]
+desc = "Run the settings app"
+run = ["cargo run --release"]
+
+[commands.probe]
+desc = "Print what every backend sees (network, Bluetooth, sound, display, updates)"
+run = ["cargo run --release -- --probe"]
+
+[commands.test]
+desc = "Run the unit tests"
+run = ["cargo test --locked"]
+alias = ["t"]
+
+[commands.check]
+desc = "fmt, clippy and tests"
+run = ["cargo fmt --check", "cargo clippy --locked --all-targets -- -D warnings", "cargo test --locked"]
+
+[commands.install]
+desc = "Install to /usr/local (sudo)"
+run = ["make install"]
+
+[commands.uninstall]
+desc = "Remove the installed copy"
+run = ["make uninstall"]

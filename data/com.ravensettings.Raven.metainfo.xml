@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.ravensettings.Raven</id>
+  <name>Settings</name>
+  <summary>Configure Raven Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>One window for Raven Linux: Wi-Fi and wired networks, Bluetooth pairing, sound, displays and brightness, appearance and wallpaper, default applications, storage, privacy, updates and system information.</p>
+  </description>
+  <launchable type="desktop-id">com.ravensettings.Raven.desktop</launchable>
+  <provides><binary>raven-settings</binary></provides>
+  <url type="homepage">https://github.com/javanhut/RavenSettingsUI</url>
+</component>

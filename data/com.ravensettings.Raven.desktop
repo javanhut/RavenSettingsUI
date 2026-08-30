@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Settings
+Comment=Configure Raven Linux
+Exec=raven-settings
+Icon=com.ravensettings.Raven
+Terminal=false
+Type=Application
+Categories=System;Settings;DesktopSettings;GTK;
+Keywords=Settings;Preferences;Network;WiFi;Bluetooth;Sound;Display;Theme;Wallpaper;Updates;
+StartupNotify=true
+StartupWMClass=raven-settings
