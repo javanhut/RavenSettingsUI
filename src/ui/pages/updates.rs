@@ -61,9 +61,11 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     list_card.set_visible(false);
     content.append(&list_card);
 
-    content.append(&widgets::dim_label(
-        "Installing runs `sudo rvn update` in your terminal so you can watch it and answer prompts. Packages from the AUR are built on this machine.",
-    ));
+    content.append(&widgets::dim_label(if updates::store_available() {
+        "Installing opens Raven Store, which shows progress and asks for your password. Packages from the AUR are built on this machine."
+    } else {
+        "Installing runs `sudo rvn update` in your terminal so you can watch it and answer prompts. Packages from the AUR are built on this machine."
+    }));
 
     let do_check = {
         let app = app.clone();
@@ -138,6 +140,16 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     {
         let app = app.clone();
         install.connect_clicked(move |_| {
+            // Raven Store shows progress in a window and handles the
+            // password prompt; a terminal is the fallback for images
+            // without it, and for people who prefer one.
+            if updates::store_available() {
+                match updates::open_store() {
+                    Ok(()) => app.toast("Opening Raven Store"),
+                    Err(e) => app.error("Could not open Raven Store", &e),
+                }
+                return;
+            }
             let terminal = app.config.borrow().general.terminal.clone();
             match launch_in_terminal(&terminal, &updates::apply_command()) {
                 Ok(()) => app.toast("Updating in a terminal window"),

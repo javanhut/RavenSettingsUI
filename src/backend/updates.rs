@@ -85,6 +85,22 @@ pub fn apply_command() -> Vec<String> {
     vec!["sudo".into(), "rvn".into(), "update".into()]
 }
 
+/// Whether Raven Store, the graphical front-end for rvn, is installed.
+pub fn store_available() -> bool {
+    have("raven-store")
+}
+
+/// Opens Raven Store on its Updates page.
+pub fn open_store() -> Result<()> {
+    std::process::Command::new("raven-store")
+        .arg("--updates")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
