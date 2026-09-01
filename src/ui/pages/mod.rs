@@ -9,6 +9,7 @@ use super::App;
 pub mod about;
 pub mod appearance;
 pub mod bluetooth;
+pub mod datetime;
 pub mod display;
 pub mod general;
 pub mod network;
@@ -35,9 +36,19 @@ pub fn all() -> Vec<PageInfo> {
             icon: "emblem-system-symbolic",
             keywords: &[
                 "terminal", "clock", "power", "lid", "suspend", "reboot", "shutdown", "lock",
-                "idle", "language", "hostname",
+                "idle", "language", "hostname", "battery", "energy", "eco", "performance",
+                "charge", "profile",
             ],
             build: general::build,
+        },
+        PageInfo {
+            id: "datetime",
+            title: "Date & Time",
+            icon: "preferences-system-time-symbolic",
+            keywords: &[
+                "time", "date", "timezone", "zone", "ntp", "sync", "clock", "utc", "region",
+            ],
+            build: datetime::build,
         },
         PageInfo {
             id: "appearance",

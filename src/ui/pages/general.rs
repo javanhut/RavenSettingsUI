@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use gio::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -187,6 +188,35 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     }
     pw_body.append(&pw_list);
     content.append(&pw_card);
+
+    // Battery management lives in its own focused application, but belongs
+    // in Settings' General power section as a first-class destination.
+    let (battery_card, battery_body) = widgets::card("Battery", "");
+    let battery_list = widgets::list();
+    let battery = adw::ActionRow::builder()
+        .title("Battery and performance")
+        .subtitle("Power profiles, application Eco mode, energy usage, and battery health")
+        .activatable(true)
+        .build();
+    battery.add_prefix(&gtk::Image::from_icon_name("battery-good-symbolic"));
+    battery.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    {
+        let app = app.clone();
+        battery.connect_activated(move |_| {
+            let result = gio::DesktopAppInfo::new("org.raven.Power.desktop")
+                .ok_or_else(|| anyhow::anyhow!("Raven Power is not installed"))
+                .and_then(|info| {
+                    info.launch(&[], None::<&gio::AppLaunchContext>)?;
+                    Ok(())
+                });
+            if let Err(error) = result {
+                app.error("Could not open battery settings", &error);
+            }
+        });
+    }
+    battery_list.append(&battery);
+    battery_body.append(&battery_list);
+    content.append(&battery_card);
 
     // Power actions
     let (act_card, act_body) = widgets::card("Power", "");

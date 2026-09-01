@@ -6,4 +6,5 @@ pub mod network;
 pub mod sound;
 pub mod storage;
 pub mod system;
+pub mod time;
 pub mod updates;
