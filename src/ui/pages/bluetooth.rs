@@ -1,9 +1,16 @@
-//! Bluetooth: adapter power and discoverability, paired devices, and a live
-//! scan of nearby devices with pairing that can answer PIN and passkey asks.
+//! Bluetooth: adapter power and discoverability, paired devices, and a scan
+//! of nearby devices with pairing that can answer PIN and passkey asks.
+//!
+//! The scan is bounded. Discovery keeps the radio in inquiry, and on a combo
+//! Wi-Fi/Bluetooth card that starves whatever is already connected: a page
+//! left open behind another window used to drop a headset. So a scan runs
+//! for [`SCAN_FOR`] from when the page opens or "Scan again" is pressed, and
+//! then stops, whether or not the window is still up.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -14,6 +21,9 @@ use crate::backend::bluetooth::{
 };
 use crate::ui::{ask_text, confirm, main_window, spawn, widgets, App};
 
+/// How long one scan runs before it stops on its own.
+const SCAN_FOR: Duration = Duration::from_secs(60);
+
 struct Page {
     banner: adw::Banner,
     power: gtk::Switch,
@@ -22,6 +32,10 @@ struct Page {
     paired: gtk::ListBox,
     nearby: gtk::ListBox,
     scanning: gtk::Spinner,
+    rescan: gtk::Button,
+    /// When the scan this page started should stop; `None` when it is not
+    /// scanning, or the scan on the adapter is somebody else's.
+    scan_until: Cell<Option<Instant>>,
     adapter: RefCell<Option<zbus::zvariant::OwnedObjectPath>>,
     busy: Cell<bool>,
     /// Set while a switch is being updated from a snapshot, so its handler
@@ -55,12 +69,16 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
 
     let (nearby_card, nearby_body) = widgets::card(
         "Nearby devices",
-        "Scanning while this page is open. Make the device discoverable, then pair.",
+        "Scans for a minute when this page opens. Make the device discoverable, then pair.",
     );
     let scanning = gtk::Spinner::new();
+    let rescan = gtk::Button::with_label("Scan again");
+    rescan.set_halign(gtk::Align::End);
+    rescan.set_hexpand(true);
     let head = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     head.append(&scanning);
     head.append(&widgets::dim_label("Scanning…"));
+    head.append(&rescan);
     nearby_body.append(&head);
     let nearby = widgets::list();
     nearby_body.append(&nearby);
@@ -74,6 +92,8 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         paired,
         nearby,
         scanning,
+        rescan,
+        scan_until: Cell::new(None),
         adapter: RefCell::new(None),
         busy: Cell::new(false),
         syncing: Cell::new(false),
@@ -130,7 +150,9 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         });
     }
 
-    // Scan while mapped, refresh every 2 s, stop on unmap.
+    // Scan for SCAN_FOR from when the page is mapped or the button is
+    // pressed, refresh every 2 s while mapped, stop on unmap or when the
+    // time is up -- the page behind another window is still mapped.
     {
         let app = app.clone();
         let page = page.clone();
@@ -144,10 +166,23 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         root.connect_unmap(move |_| set_discovery(&page, false));
     }
     {
+        let page = page.clone();
+        page.rescan
+            .clone()
+            .connect_clicked(move |_| set_discovery(&page, true));
+    }
+    {
         let app = app.clone();
         let page = page.clone();
         let root2 = root.clone();
-        glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+        glib::timeout_add_local(Duration::from_secs(2), move || {
+            if page
+                .scan_until
+                .get()
+                .is_some_and(|until| Instant::now() >= until)
+            {
+                set_discovery(&page, false);
+            }
             if root2.is_mapped() && !page.busy.get() {
                 refresh(&app, &page);
             }
@@ -164,9 +199,12 @@ fn set_discovery(page: &Rc<Page>, on: bool) {
     };
     if on {
         page.scanning.start();
+        page.scan_until.set(Some(Instant::now() + SCAN_FOR));
     } else {
         page.scanning.stop();
+        page.scan_until.set(None);
     }
+    page.rescan.set_sensitive(!on);
     spawn(
         move || {
             Bluetooth::connect().and_then(|b| {
@@ -236,9 +274,17 @@ fn show(app: &Rc<App>, page: &Rc<Page>, avail: Availability, snap: Snapshot) {
     page.discoverable.set_sensitive(adapter.powered);
     page.adapter_name
         .set_text(&format!("{} · {}", adapter.name, adapter.address));
-    if adapter.powered && !adapter.discovering {
-        set_discovery(page, true);
+    // The spinner shows the adapter's state, not just this page's: a scan
+    // from quick settings or the bar is a scan all the same. Never restart
+    // one from here; that is what the button and the page opening are for.
+    if adapter.discovering {
+        page.scanning.start();
+    } else {
+        page.scanning.stop();
+        page.scan_until.set(None);
     }
+    page.rescan
+        .set_sensitive(adapter.powered && !adapter.discovering);
 
     widgets::clear(&page.paired);
     widgets::clear(&page.nearby);
