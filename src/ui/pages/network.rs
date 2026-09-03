@@ -20,6 +20,11 @@ struct Page {
     networks: gtk::ListBox,
     ports: gtk::ListBox,
     progress: gtk::Label,
+    daemon: gtk::Switch,
+    daemon_banner: adw::Banner,
+    /// True while we set the switch programmatically to reflect cawd's real
+    /// state, so the state-set handler doesn't act on it.
+    toggling: std::cell::Cell<bool>,
     current_ssid: RefCell<Option<String>>,
     wifi_port: RefCell<Option<String>>,
 }
@@ -27,11 +32,13 @@ struct Page {
 pub fn build(app: &Rc<App>) -> gtk::Widget {
     let (root, content) = widgets::page("Network", "Wi-Fi and wired connections, managed by cawd.");
 
-    if !Client::available() {
-        content.append(&widgets::banner(
-            "cawd is not running, so there is nothing to manage. Start it with: sudo raven-rc start cawd",
-        ));
-    } else if !net::can_change() {
+    let daemon_banner = widgets::banner(
+        "cawd is not running, so Wi-Fi is off. Use the switch below to start it.",
+    );
+    daemon_banner.set_visible(false);
+    content.append(&daemon_banner);
+
+    if Client::available() && !net::can_change() {
         let b = widgets::banner(
             "You can see networks but not join them: this account is not in the caw group.",
         );
@@ -65,6 +72,11 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let disconnect = gtk::Button::with_label("Disconnect");
     disconnect.set_valign(gtk::Align::Center);
     disconnect.set_visible(false);
+    let daemon = gtk::Switch::new();
+    daemon.set_valign(gtk::Align::Center);
+    daemon.set_tooltip_text(Some("Start or stop the cawd Wi-Fi service"));
+    daemon.set_active(Client::available());
+    status_row.append(&daemon);
     status_row.append(&disconnect);
     status_body.append(&status_row);
     let progress = widgets::dim_label("");
@@ -108,9 +120,27 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         networks,
         ports,
         progress,
+        daemon,
+        daemon_banner,
+        toggling: std::cell::Cell::new(false),
         current_ssid: RefCell::new(None),
         wifi_port: RefCell::new(None),
     });
+
+    {
+        let app = app.clone();
+        let page = page.clone();
+        let page_for_cb = page.clone();
+        page.daemon.connect_state_set(move |_, want_on| {
+            if page_for_cb.toggling.get() {
+                return glib::Propagation::Proceed;
+            }
+            // Leave the switch where it is until raven-rc succeeds; refresh
+            // flips it once cawd's state is known.
+            set_daemon(&app, &page_for_cb, want_on);
+            glib::Propagation::Stop
+        });
+    }
 
     {
         let app = app.clone();
@@ -191,8 +221,28 @@ struct Refresh {
 
 fn refresh(app: &Rc<App>, page: &Rc<Page>, rescan: bool) {
     if !Client::available() {
+        page.spinner.stop();
+        page.scan.set_sensitive(true);
+        page.daemon_banner.set_visible(true);
+        page.toggling.set(true);
+        page.daemon.set_active(false);
+        page.toggling.set(false);
+        page.status_title.set_text("Wi-Fi is off");
+        page.status_sub.set_text("cawd is not running");
+        page.disconnect.set_visible(false);
+        page.progress.set_visible(false);
+        widgets::clear(&page.networks);
+        page.networks
+            .append(&adw::ActionRow::builder().title("Wi-Fi is off").build());
+        widgets::clear(&page.ports);
+        page.ports
+            .append(&adw::ActionRow::builder().title("No wired ports").build());
         return;
     }
+    page.daemon_banner.set_visible(false);
+    page.toggling.set(true);
+    page.daemon.set_active(true);
+    page.toggling.set(false);
     page.spinner.start();
     page.scan.set_sensitive(false);
     let app = app.clone();
@@ -362,6 +412,38 @@ fn show_ports(app: &Rc<App>, page: &Rc<Page>, ports: &[PortSummary]) {
         page.ports
             .append(&adw::ActionRow::builder().title("No wired ports").build());
     }
+}
+
+/// Flip cawd on or off via raven-rc (asking for the sudo password when
+/// needed), then rescan once the socket is up.
+fn set_daemon(app: &Rc<App>, page: &Rc<Page>, want_on: bool) {
+    page.daemon.set_sensitive(false);
+    let app = app.clone();
+    let page = page.clone();
+    spawn(
+        move || {
+            let r = net::set_daemon(want_on);
+            let ready = r.is_ok() && (!want_on || net::wait_ready(std::time::Duration::from_secs(10)));
+            (r, ready)
+        },
+        move |(r, ready)| {
+            page.daemon.set_sensitive(true);
+            match (&r, ready) {
+                (Err(e), _) => app.error(
+                    if want_on {
+                        "Could not start cawd"
+                    } else {
+                        "Could not stop cawd"
+                    },
+                    e,
+                ),
+                (Ok(()), false) => app
+                    .toast("cawd started but is not answering yet; try Scan again in a moment"),
+                _ => {}
+            }
+            refresh(&app, &page, r.is_ok() && ready && want_on);
+        },
+    );
 }
 
 /// Join a network. The daemon asks for credentials over the socket while the

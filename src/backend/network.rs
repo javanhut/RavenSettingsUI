@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 pub const SOCKET_PATH: &str = "/run/caw/caw.sock";
 pub const GROUP: &str = "caw";
+pub const SERVICE: &str = "cawd";
 
 #[derive(Debug, Clone, Serialize)]
 enum Request {
@@ -267,10 +268,7 @@ impl Client {
 /// Whether the current user may issue state-changing requests: root, or a
 /// member of the `caw` group.
 pub fn can_change() -> bool {
-    if std::fs::read_to_string("/proc/self/status")
-        .map(|s| s.lines().any(|l| l.starts_with("Uid:\t0\t")))
-        .unwrap_or(false)
-    {
+    if is_root() {
         return true;
     }
     let out = std::process::Command::new("id").arg("-Gn").output();
@@ -280,6 +278,55 @@ pub fn can_change() -> bool {
             .any(|g| g == GROUP),
         Err(_) => false,
     }
+}
+
+fn is_root() -> bool {
+    std::fs::read_to_string("/proc/self/status")
+        .map(|s| s.lines().any(|l| l.starts_with("Uid:\t0\t")))
+        .unwrap_or(false)
+}
+
+/// Start or stop the cawd service through `raven-rc`. Run directly when
+/// root; otherwise through `sudo -A`, which gets its password from this
+/// binary's `--askpass` mode so the GUI never needs a terminal.
+pub fn set_daemon(running: bool) -> Result<()> {
+    let action = if running { "start" } else { "stop" };
+    let mut cmd = if is_root() {
+        let mut c = std::process::Command::new("raven-rc");
+        c.args([action, SERVICE]);
+        c
+    } else {
+        let askpass = std::env::current_exe()
+            .context("cannot locate raven-settings for the password prompt")?;
+        let mut c = std::process::Command::new("sudo");
+        c.args(["-A", "raven-rc", action, SERVICE])
+            .env("SUDO_ASKPASS", askpass);
+        c
+    };
+    let out = cmd.output().with_context(|| format!("could not run raven-rc {action}"))?;
+    if !out.status.success() {
+        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let msg = if msg.is_empty() {
+            format!("raven-rc exited with {}", out.status)
+        } else {
+            msg
+        };
+        bail!("raven-rc {action} {SERVICE}: {msg}");
+    }
+    Ok(())
+}
+
+/// Wait for cawd's socket to appear after a start; the daemon needs a moment
+/// before it answers. Returns whether it came up in time.
+pub fn wait_ready(timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if Client::available() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    Client::available()
 }
 
 /// Signal strength as 0..=4 bars.

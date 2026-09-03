@@ -1,7 +1,16 @@
-//! Updates: check with `rvn update --dry-run`, apply in a terminal.
+//! Updates: check with `rvn update --dry-run`, apply in Raven Store or a
+//! terminal.
+//!
+//! A check here runs as the user, so rvn syncs the databases into a
+//! per-user copy when it cannot write the system one. Later checks — here,
+//! in Raven Store, or `rvn update --dry-run --no-refresh` — read whichever
+//! copy is fresher, so the two apps always agree. The page also watches the
+//! database directories and re-checks when something else changes them.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Instant;
 
 use gtk4 as gtk;
 use libadwaita as adw;
@@ -12,6 +21,8 @@ use crate::ui::{spawn, widgets, App};
 
 thread_local! {
     static STATUS: Cell<Option<usize>> = const { Cell::new(None) };
+    /// Kept alive for the life of the process; a dropped monitor stops.
+    static MONITORS: RefCell<Vec<gio::FileMonitor>> = const { RefCell::new(Vec::new()) };
 }
 
 /// How many updates the last check found; `None` before any check.
@@ -67,6 +78,9 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         "Installing runs `sudo rvn update` in your terminal so you can watch it and answer prompts. Packages from the AUR are built on this machine."
     }));
 
+    // When the last check started, so the database watcher can tell a
+    // change that check already saw from one that arrived after it.
+    let checked_at: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
     let do_check = {
         let app = app.clone();
         let headline = headline.clone();
@@ -76,7 +90,13 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         let install = install.clone();
         let list = list.clone();
         let list_card = list_card.clone();
+        let checked_at = checked_at.clone();
         Rc::new(move |refresh: bool| {
+            // A check is already running; it will report what it finds.
+            if !check.is_sensitive() {
+                return;
+            }
+            checked_at.set(Some(Instant::now()));
             spinner.start();
             check.set_sensitive(false);
             headline.set_text("Checking…");
@@ -163,7 +183,83 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         let do_check = do_check.clone();
         glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || do_check(false));
     }
+    watch_databases(do_check, checked_at);
     root.upcast()
+}
+
+/// The directories rvn writes when the picture of the system changes: the
+/// system sync databases, the per-user copy an unprivileged check syncs
+/// into, and the local database of what is installed.
+fn watched_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/var/lib/pacman/sync"),
+        PathBuf::from("/var/lib/pacman/local"),
+    ];
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")));
+    if let Some(cache) = cache {
+        dirs.push(cache.join("rvn").join("sync"));
+    }
+    dirs
+}
+
+/// Re-checks (without refreshing) shortly after any of [`watched_dirs`]
+/// changes, so a check made in Raven Store, or an update applied there or
+/// from a terminal, is reflected here and in the sidebar badge without
+/// pressing the button again. Bursts of events collapse into one check; a
+/// change our own check already covered is skipped.
+fn watch_databases(do_check: Rc<dyn Fn(bool)>, checked_at: Rc<Cell<Option<Instant>>>) {
+    let changed_at: Rc<Cell<Option<Instant>>> = Rc::new(Cell::new(None));
+    let pending: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    for dir in watched_dirs() {
+        // The per-user copy may not exist until the first check; creating
+        // it early costs nothing and lets it be watched from the start.
+        if dir.starts_with(std::env::var_os("HOME").unwrap_or_default()) {
+            let _ = std::fs::create_dir_all(&dir);
+        }
+        let monitor = match gio::File::for_path(&dir)
+            .monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        {
+            Ok(m) => {
+                tracing::debug!("watching {}", dir.display());
+                m
+            }
+            Err(e) => {
+                tracing::debug!("not watching {}: {e}", dir.display());
+                continue;
+            }
+        };
+        let do_check = do_check.clone();
+        let checked_at = checked_at.clone();
+        let changed_at = changed_at.clone();
+        let pending = pending.clone();
+        monitor.connect_changed(move |_, _, _, _| {
+            changed_at.set(Some(Instant::now()));
+            if let Some(id) = pending.borrow_mut().take() {
+                id.remove();
+            }
+            let do_check = do_check.clone();
+            let checked_at = checked_at.clone();
+            let changed_at = changed_at.clone();
+            let pending2 = pending.clone();
+            let id = glib::timeout_add_local_once(std::time::Duration::from_secs(3), move || {
+                pending2.borrow_mut().take();
+                let stale = match (changed_at.get(), checked_at.get()) {
+                    (Some(changed), Some(checked)) => changed > checked,
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                };
+                if stale {
+                    tracing::info!("package databases changed on disk; re-checking");
+                    do_check(false);
+                }
+            });
+            *pending.borrow_mut() = Some(id);
+        });
+        MONITORS.with(|m| m.borrow_mut().push(monitor));
+    }
 }
 
 /// Run a command in the user's terminal. `-e` is what nearly every emulator

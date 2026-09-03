@@ -4,6 +4,9 @@ mod ui;
 mod util;
 
 fn main() -> glib::ExitCode {
+    if std::env::args().any(|a| a == "--askpass") {
+        return askpass();
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -15,6 +18,54 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::SUCCESS;
     }
     ui::run()
+}
+
+/// `raven-settings --askpass`: the graphical password prompt for `sudo -A`.
+/// Only ever invoked by sudo (see `backend::network::set_daemon`); prints the
+/// password on stdout, nothing else. Tracing is not initialised here so the
+/// log lines cannot pollute the password.
+fn askpass() -> glib::ExitCode {
+    use gtk4 as gtk;
+    use libadwaita::prelude::*;
+
+    libadwaita::init().expect("could not initialise GTK: is a Wayland display available?");
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    let dialog = libadwaita::AlertDialog::new(
+        Some("Authentication required"),
+        Some("Enter your password to manage the Wi-Fi service."),
+    );
+    let entry = gtk::PasswordEntry::builder()
+        .show_peek_icon(true)
+        .activates_default(true)
+        .build();
+    dialog.set_extra_child(Some(&entry));
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("ok", "Authenticate");
+    dialog.set_response_appearance("ok", libadwaita::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("ok"));
+    let main_loop = glib::MainLoop::new(None, false);
+    {
+        let entry = entry.clone();
+        let main_loop = main_loop.clone();
+        dialog.connect_response(None, move |_, r| {
+            let _ = tx.send(if r == "ok" {
+                Some(entry.text().to_string())
+            } else {
+                None
+            });
+            main_loop.quit();
+        });
+    }
+    dialog.present(None::<&gtk::Window>);
+    entry.grab_focus();
+    main_loop.run();
+    match rx.recv() {
+        Ok(Some(password)) => {
+            println!("{password}");
+            glib::ExitCode::SUCCESS
+        }
+        _ => glib::ExitCode::FAILURE,
+    }
 }
 
 /// `raven-settings --probe`: exercise every backend and print what it sees.
