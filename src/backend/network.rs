@@ -142,8 +142,14 @@ impl Client {
         })
     }
 
+    /// Whether a cawd is listening. This connects rather than checking that
+    /// the path exists: cawd has no signal handler and std's listener does
+    /// not unlink on drop, so a stopped cawd can leave the socket file
+    /// behind, and a file that nothing accepts on is not a daemon. cawd's
+    /// own "another cawd is listening" startup check and rvn's reach() make
+    /// the same probe. The socket is 0666, so connecting needs no group.
     pub fn available() -> bool {
-        std::path::Path::new(SOCKET_PATH).exists()
+        UnixStream::connect(SOCKET_PATH).is_ok()
     }
 
     fn send(&mut self, req: &Request) -> Result<()> {
@@ -286,47 +292,33 @@ fn is_root() -> bool {
         .unwrap_or(false)
 }
 
-/// Start or stop the cawd service through `raven-rc`. Run directly when
-/// root; otherwise through `sudo -A`, which gets its password from this
-/// binary's `--askpass` mode so the GUI never needs a terminal.
-pub fn set_daemon(running: bool) -> Result<()> {
+/// The command that starts or stops the cawd service. Nothing unprivileged
+/// can ask raven-init to start a service (init's socket is root-only, and
+/// there is no daemon between the session and it for this), so the page
+/// runs this in the user's terminal, where sudo asks for the password: see
+/// `backend::terminal`. It is never run from this process.
+pub fn daemon_command(running: bool) -> Vec<String> {
     let action = if running { "start" } else { "stop" };
-    let mut cmd = if is_root() {
-        let mut c = std::process::Command::new("raven-rc");
-        c.args([action, SERVICE]);
-        c
-    } else {
-        let askpass = std::env::current_exe()
-            .context("cannot locate raven-settings for the password prompt")?;
-        let mut c = std::process::Command::new("sudo");
-        c.args(["-A", "raven-rc", action, SERVICE])
-            .env("SUDO_ASKPASS", askpass);
-        c
-    };
-    let out = cmd.output().with_context(|| format!("could not run raven-rc {action}"))?;
-    if !out.status.success() {
-        let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        let msg = if msg.is_empty() {
-            format!("raven-rc exited with {}", out.status)
-        } else {
-            msg
-        };
-        bail!("raven-rc {action} {SERVICE}: {msg}");
-    }
-    Ok(())
+    ["sudo", "raven-rc", action, SERVICE]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
-/// Wait for cawd's socket to appear after a start; the daemon needs a moment
-/// before it answers. Returns whether it came up in time.
-pub fn wait_ready(timeout: Duration) -> bool {
+/// Wait for cawd to start accepting connections after a start, or to stop
+/// accepting them after a stop. The daemon needs a moment before it
+/// answers, and when the change is made in a terminal the person typing a
+/// password needs longer. Returns whether cawd reached the wanted state in
+/// time.
+pub fn wait_until(available: bool, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if Client::available() {
+        if Client::available() == available {
             return true;
         }
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(250));
     }
-    Client::available()
+    Client::available() == available
 }
 
 /// Signal strength as 0..=4 bars.

@@ -8,7 +8,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::backend::{apps, system};
-use crate::ui::{confirm, spawn, widgets, App};
+use crate::ui::{confirm, offer_terminal, spawn, widgets, App};
 
 const IDLE: [(&str, u32); 6] = [
     ("Never", 0),
@@ -124,7 +124,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     // Power buttons & lid
     let (pw_card, pw_body) = widgets::card(
         "Power buttons and lid",
-        "From /etc/raven/power.toml. Changing these needs your password.",
+        "From /etc/raven/power.toml, which is root's file: a change is made in your terminal, where sudo asks for your password.",
     );
     let pw_list = widgets::list();
     match system::power_policy() {
@@ -155,24 +155,74 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                         .unwrap_or(0) as u32,
                 );
                 let app = app.clone();
-                let current = std::cell::RefCell::new(current);
+                let current = Rc::new(std::cell::RefCell::new(current));
                 row.connect_selected_notify(move |r| {
                     let value = POWER_CHOICES[r.selected() as usize].1;
                     if *current.borrow() == value {
                         return;
                     }
-                    *current.borrow_mut() = value.to_string();
-                    let app = app.clone();
-                    spawn(
-                        move || system::set_power_policy(table, key, value),
-                        move |res| match res {
-                            Ok(()) => app.toast("Power policy updated"),
-                            Err(e) => {
-                                let d =
-                                    adw::AlertDialog::new(Some("Needs root"), Some(&e.to_string()));
-                                d.add_response("ok", "OK");
-                                d.present(Some(&app.window()));
+                    // The file is root's and raven-powerd's socket has no
+                    // verb for policy, so the edit runs in a terminal the
+                    // user authorises (see backend::terminal); the row
+                    // follows the file, not the click, so a cancelled
+                    // password leaves it telling the truth.
+                    let cmd = match system::power_policy_command(table, key, value) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            app.error("Power policy", &e);
+                            return;
+                        }
+                    };
+                    let label = POWER_CHOICES[r.selected() as usize].0;
+                    let app2 = app.clone();
+                    let row = r.clone();
+                    let current = current.clone();
+                    offer_terminal(
+                        &app,
+                        &format!("{title}: {label}?"),
+                        "raven-powerd reads /etc/raven/power.toml when it starts, so the file is rewritten and the service restarted.",
+                        &cmd,
+                        move |ran| {
+                            let restore = |row: &adw::ComboRow, current: &str| {
+                                if let Some(i) = POWER_CHOICES.iter().position(|c| c.1 == current) {
+                                    row.set_selected(i as u32);
+                                }
+                            };
+                            if !ran {
+                                restore(&row, &current.borrow());
+                                return;
                             }
+                            let app = app2.clone();
+                            let row = row.clone();
+                            let current = current.clone();
+                            row.set_sensitive(false);
+                            spawn(
+                                move || {
+                                    let deadline = std::time::Instant::now()
+                                        + std::time::Duration::from_secs(90);
+                                    while std::time::Instant::now() < deadline {
+                                        let landed = system::power_policy()
+                                            .ok()
+                                            .and_then(|p| p.get(table, key).map(|v| v == value))
+                                            .unwrap_or(false);
+                                        if landed {
+                                            return true;
+                                        }
+                                        std::thread::sleep(std::time::Duration::from_millis(500));
+                                    }
+                                    false
+                                },
+                                move |landed| {
+                                    row.set_sensitive(true);
+                                    if landed {
+                                        *current.borrow_mut() = value.to_string();
+                                        app.toast("Power policy updated");
+                                    } else {
+                                        app.toast("power.toml did not change");
+                                        restore(&row, &current.borrow());
+                                    }
+                                },
+                            );
                         },
                     );
                 });

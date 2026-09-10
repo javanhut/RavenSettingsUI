@@ -155,6 +155,63 @@ pub fn run() -> glib::ExitCode {
     gtk_app.run()
 }
 
+/// Explain a privileged step and offer to run it in the user's terminal.
+/// `body` says why root is needed; the exact command is shown beneath it
+/// and can be copied instead. `on_answer(true)` once the terminal has been
+/// opened -- the command itself is still running there, so the caller
+/// watches for its effect rather than assuming it. This is the only way a
+/// page reaches root; see `backend::terminal` for the rule behind it.
+pub fn offer_terminal(
+    app: &Rc<App>,
+    heading: &str,
+    body: &str,
+    cmd: &[String],
+    on_answer: impl Fn(bool) + 'static,
+) {
+    use crate::backend::terminal;
+    let line = terminal::command_line(cmd);
+    let d = adw::AlertDialog::new(
+        Some(heading),
+        Some(&format!(
+            "{body}\n\nThis will open your terminal and run the command below; sudo asks for your password there, not here."
+        )),
+    );
+    let entry = gtk::Entry::builder().text(&line).editable(false).build();
+    entry.add_css_class("mono");
+    d.set_extra_child(Some(&entry));
+    d.add_response("cancel", "Cancel");
+    d.add_response("copy", "Copy command");
+    d.add_response("run", "Run in terminal");
+    d.set_response_appearance("run", adw::ResponseAppearance::Suggested);
+    d.set_default_response(Some("run"));
+    d.set_close_response("cancel");
+    let parent = app.window();
+    let app = app.clone();
+    let cmd = cmd.to_vec();
+    d.connect_response(None, move |_, r| match r {
+        "run" => {
+            let term = app.config.borrow().general.terminal.clone();
+            match terminal::run(&term, &cmd) {
+                Ok(()) => {
+                    app.toast("Running in a terminal window");
+                    on_answer(true);
+                }
+                Err(e) => {
+                    app.error("Could not open a terminal", &e);
+                    on_answer(false);
+                }
+            }
+        }
+        "copy" => {
+            app.window().clipboard().set_text(&line);
+            app.toast("Command copied");
+            on_answer(false);
+        }
+        _ => on_answer(false),
+    });
+    d.present(Some(&parent));
+}
+
 /// Ask a yes/no question. `on_answer(true)` when confirmed.
 pub fn confirm(
     parent: &impl IsA<gtk::Widget>,

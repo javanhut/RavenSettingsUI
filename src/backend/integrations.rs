@@ -245,14 +245,18 @@ pub fn set_wallpaper_via_canvas(path: &Path) -> Result<bool> {
     .context("ravencanvas refused the image")
 }
 
-/// The command that puts a wallpaper where the compositor reads it.
-pub fn system_wallpaper_command(src: &Path) -> String {
+/// The command that puts a wallpaper where the compositor reads it. The
+/// directory is root's and no daemon owns it (RavenCanvas is the no-root
+/// path, tried first), so the page offers to run this in the user's
+/// terminal (see `backend::terminal`); it is never run from this process.
+pub fn system_wallpaper_command(src: &Path) -> Vec<String> {
     let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
-    format!(
-        "sudo sh -c 'rm -f {dir}/wallpaper.* && install -m 644 \"{src}\" {dir}/wallpaper.{ext}'",
+    let script = format!(
+        "rm -f {dir}/wallpaper.* && install -m 644 {src} {dir}/wallpaper.{ext}",
         dir = SYSTEM_WALLPAPER_DIR,
-        src = src.display(),
-    )
+        src = crate::backend::terminal::shell_quote(&src.to_string_lossy()),
+    );
+    vec!["sudo".into(), "sh".into(), "-c".into(), script]
 }
 
 pub fn current_system_wallpaper() -> Option<PathBuf> {
@@ -321,6 +325,20 @@ mod tests {
         assert!(out.contains("height = 26"));
         // accent under [table] is untouched; a top-level one is added before it.
         assert!(out.contains("accent = \"#123456\"\n[table]\naccent = \"x\""));
+    }
+
+    #[test]
+    fn wallpaper_command_quotes_the_source() {
+        let cmd = system_wallpaper_command(Path::new("/home/me/it's here.png"));
+        assert_eq!(&cmd[..3], ["sudo", "sh", "-c"]);
+        assert!(cmd[3].contains("'/home/me/it'\\''s here.png'"));
+        assert!(cmd[3].ends_with("wallpaper.png"));
+        let ok = std::process::Command::new("sh")
+            .args(["-n", "-c", &cmd[3]])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(true);
+        assert!(ok, "sh -n rejected {}", cmd[3]);
     }
 
     #[test]

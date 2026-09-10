@@ -9,7 +9,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::backend::network::{self as net, Client, NetworkSummary, PortSummary, SecretKind};
-use crate::ui::{ask_text, main_window, spawn, widgets, App};
+use crate::ui::{ask_text, main_window, offer_terminal, spawn, widgets, App};
 
 struct Page {
     status_title: gtk::Label,
@@ -42,14 +42,29 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         let b = widgets::banner(
             "You can see networks but not join them: this account is not in the caw group.",
         );
-        b.set_button_label(Some("Copy fix"));
+        b.set_button_label(Some("Fix…"));
         let app2 = app.clone();
         b.connect_button_clicked(move |_| {
+            // Group membership is root's to grant and no daemon offers it,
+            // so the usermod runs in a terminal the user authorises; this
+            // process never escalates (see backend::terminal).
             let user = std::env::var("USER").unwrap_or_default();
-            app2.window().clipboard().set_text(&format!(
-                "sudo usermod -aG caw {user}   # then log out and back in"
-            ));
-            app2.toast("Command copied");
+            let cmd: Vec<String> = ["sudo", "usermod", "-aG", net::GROUP, &user]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            let app3 = app2.clone();
+            offer_terminal(
+                &app2,
+                "Join the caw group?",
+                &format!("cawd only takes changes from members of the {} group. Adding {user} to it needs root; the change applies after you log out and back in.", net::GROUP),
+                &cmd,
+                move |ran| {
+                    if ran {
+                        app3.toast("Log out and back in once it finishes");
+                    }
+                },
+            );
         });
         content.append(&b);
     }
@@ -135,8 +150,9 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             if page_for_cb.toggling.get() {
                 return glib::Propagation::Proceed;
             }
-            // Leave the switch where it is until raven-rc succeeds; refresh
-            // flips it once cawd's state is known.
+            // Leave the switch where it is: set_daemon only learns the
+            // outcome by watching cawd's socket, and refresh flips the
+            // switch once that is known.
             set_daemon(&app, &page_for_cb, want_on);
             glib::Propagation::Stop
         });
@@ -414,36 +430,49 @@ fn show_ports(app: &Rc<App>, page: &Rc<Page>, ports: &[PortSummary]) {
     }
 }
 
-/// Flip cawd on or off via raven-rc (asking for the sudo password when
-/// needed), then rescan once the socket is up.
+/// Flip cawd on or off. raven-rc needs root and there is no daemon between
+/// the session and init for starting a service, so the command runs in the
+/// user's terminal after they agree to it -- never with sudo from this
+/// process (see backend::terminal). The socket is watched afterwards so
+/// the page reflects what actually happened, whether the person typed the
+/// password or closed the terminal.
 fn set_daemon(app: &Rc<App>, page: &Rc<Page>, want_on: bool) {
-    page.daemon.set_sensitive(false);
-    let app = app.clone();
+    let cmd = net::daemon_command(want_on);
+    let body = if want_on {
+        "Wi-Fi is handled by cawd, a system service that raven-rc starts as root."
+    } else {
+        "Stopping cawd turns Wi-Fi off for everyone on this machine. raven-rc stops it as root."
+    };
+    let heading = if want_on {
+        "Start Wi-Fi?"
+    } else {
+        "Stop Wi-Fi?"
+    };
     let page = page.clone();
-    spawn(
-        move || {
-            let r = net::set_daemon(want_on);
-            let ready = r.is_ok() && (!want_on || net::wait_ready(std::time::Duration::from_secs(10)));
-            (r, ready)
-        },
-        move |(r, ready)| {
-            page.daemon.set_sensitive(true);
-            match (&r, ready) {
-                (Err(e), _) => app.error(
-                    if want_on {
-                        "Could not start cawd"
+    let app2 = app.clone();
+    offer_terminal(app, heading, body, &cmd, move |ran| {
+        let app = app2.clone();
+        if !ran {
+            refresh(&app, &page, false);
+            return;
+        }
+        page.daemon.set_sensitive(false);
+        let page = page.clone();
+        spawn(
+            move || net::wait_until(want_on, std::time::Duration::from_secs(90)),
+            move |done| {
+                page.daemon.set_sensitive(true);
+                if !done {
+                    app.toast(if want_on {
+                        "cawd is not answering yet; try Scan again in a moment"
                     } else {
-                        "Could not stop cawd"
-                    },
-                    e,
-                ),
-                (Ok(()), false) => app
-                    .toast("cawd started but is not answering yet; try Scan again in a moment"),
-                _ => {}
-            }
-            refresh(&app, &page, r.is_ok() && ready && want_on);
-        },
-    );
+                        "cawd is still running"
+                    });
+                }
+                refresh(&app, &page, done && want_on);
+            },
+        );
+    });
 }
 
 /// Join a network. The daemon asks for credentials over the socket while the

@@ -25,15 +25,15 @@ setting on Raven, and says so when that component is not there.
 
 | Page | Backend | Notes |
 |---|---|---|
-| Network | `cawd` over its socket `/run/caw/caw.sock` (newline JSON, the `caw-ipc` wire form) | Scan, join (passphrase and enterprise credentials asked in a dialog, never on argv), disconnect, wired ports up/down. Joining needs the account in the `caw` group; the page offers the `usermod` line. Forgetting a saved network is not in cawd's protocol yet. |
+| Network | `cawd` over its socket `/run/caw/caw.sock` (newline JSON, the `caw-ipc` wire form) | Scan, join (passphrase and enterprise credentials asked in a dialog, never on argv), disconnect, wired ports up/down. Joining needs the account in the `caw` group; the page offers to run the `usermod` in your terminal. Starting or stopping cawd is `sudo raven-rc` in your terminal too. Forgetting a saved network is not in cawd's protocol yet. |
 | Bluetooth | BlueZ on the system bus via zbus | Power, visibility, discovery while the page is open, pair/trust/connect, forget. A `KeyboardDisplay` agent turns passkey confirmations, PIN and passkey requests into dialogs. |
 | Sound | `wpctl` | Same backend as Huginn's quick settings, so the two never disagree. Default sink/source, volume, mute. |
-| Display | `raven_output_layout_v1` (raven_shell_v1 **version 3**) + `/sys/class/backlight` | Per-screen scale and position, applied together. Needs a compositor that offers v3; older ones get a clear message. Brightness needs the udev rule below. |
+| Display | `raven_output_layout_v1` (raven_shell_v1 **version 3**) + `/sys/class/backlight` | Per-screen scale and position, applied together. Needs a compositor that offers v3; older ones get a clear message. Brightness needs the udev rule below; the page offers to install it in your terminal. |
 | Storage | `lsblk -J`, `df` | |
-| Updates | `rvn update --dry-run` (report is on stderr) | Installing opens your terminal on `sudo rvn update` so prompts and `makepkg` output stay visible. |
-| General | `/etc/raven/power.toml` (read; writes via `sudo -n` or shows the command), `/run/raven-power/ctl` for sleep/restart/power off | |
+| Updates | `rvn update --dry-run` (report is on stderr) | Installing opens your terminal on `rvn update`, which goes through `rvnd` on `/run/rvn/ctl` when that socket is reachable (no password), and on `sudo rvn update` otherwise. Either way prompts and `makepkg` output stay visible. |
+| General | `/etc/raven/power.toml` (read), `/run/raven-power/ctl` for sleep/restart/power off | Changing the button and lid policy rewrites root's file and restarts `powerd`; that runs in your terminal. |
 | Personalization | `$XDG_STATE_HOME/raven/pins` (dock), `~/.config/roostbar/config.toml` (bar), `~/.config/mimeapps.list` through GIO (default apps) | The compositor reads `pins` at start, so dock edits show at next login. |
-| Appearance | `~/.config/raven/desktop.toml`, read by Huginn; wallpaper via `ravencanvas set --persist`; pushed to RoostBar and GTK | See below. |
+| Appearance | `~/.config/raven/desktop.toml`, read by Huginn; wallpaper via `ravencanvas set --persist`; pushed to RoostBar and GTK | See below. Without RavenCanvas, installing the wallpaper system-wide is offered as a command for your terminal. |
 | Privacy | `$XDG_STATE_HOME/raven/frecency` and app search histories | |
 
 ## desktop.toml — the desktop-wide settings file
@@ -99,11 +99,39 @@ On every save the app also:
 Shadows, animation speed and interface scale are recorded for applications
 and the bar; the compositor has no switches for those yet.
 
+## Privilege: sockets first, then your terminal, never sudo from the GUI
+
+The rule is RavenLinux's (ARCHITECTURE.md, "Sleep" and the paragraphs after
+it): privilege is a verb granted by a group on a socket owned by a daemon
+that is already the policy gatekeeper. `raven-settings` never runs `sudo`,
+`pkexec` or `run0` itself, and has no password prompt of its own. Where a
+daemon offers the action, the page talks to its socket; where none does, the
+page shows the exact command and, once you agree, opens your terminal on it
+(`backend/terminal.rs`, the pattern Raven Store uses to apply updates), so
+sudo asks for the password where you can see it. Per site:
+
+| Action | Path | Why |
+|---|---|---|
+| Sleep, restart, power off | `raven-powerd` on `/run/raven-power/ctl` (group `video`) | The daemon exists for this. |
+| Clock and time zone | `raven-timed` on `/run/raven-time/ctl` (group `video`) | Same. |
+| Join, scan, ports up/down | `cawd` on `/run/caw/caw.sock` (group `caw`) | Same. |
+| Install updates | `rvn update` in your terminal; rvn itself uses `rvnd` on `/run/rvn/ctl` (group `wheel`) when it can connect, else `sudo rvn update` in that terminal | rvnd is the door for packages. The terminal stays because the plan is confirmed and `makepkg` runs there. |
+| Start or stop cawd | `sudo raven-rc start|stop cawd` in your terminal | Init's socket is root-only and no daemon fronts service control; nothing unprivileged writes to PID 1. |
+| Power button and lid policy | `sudo sh -c 'sed … /etc/raven/power.toml && raven-rc restart powerd'` in your terminal | `raven-powerd`'s socket takes `suspend`, `poweroff`, `reboot` and nothing about policy; the file is root's. |
+| Add the account to `caw` | `sudo usermod -aG caw $USER` in your terminal | Group membership has no daemon. |
+| Backlight udev rule | `sudo sh -c '… > /etc/udev/rules.d/90-backlight.rules && chgrp/chmod …'` in your terminal | `raven-controlsd` (`/run/raven-controls/ctl`) drives the keyboard backlight and fans, not `/sys/class/backlight`. |
+| System-wide wallpaper | `sudo sh -c 'rm -f … && install …'` in your terminal, only when RavenCanvas is absent | `ravencanvas set --persist` is the no-root path; `/usr/share/wallpaper/set` is root's and nothing owns it. |
+
+Every dialog that leads to a terminal also offers to copy the command, so
+running it by hand is always an option.
+
 ## Setup on a machine
 
-- **Wi-Fi changes**: `sudo usermod -aG caw $USER`, then log out and in.
+- **Wi-Fi changes**: `sudo usermod -aG caw $USER`, then log out and in
+  (the Network page offers this).
 - **Brightness**: `sudo cp data/90-backlight.rules /etc/udev/rules.d/ && sudo udevadm trigger -s backlight`
-  (or after `make install`, from `/usr/local/share/raven-settings/`).
+  (or after `make install`, from `/usr/local/share/raven-settings/`; the
+  Display page offers the equivalent).
 - **Bluetooth**: `sudo rvn install -y bluez`, copy
   `/usr/share/raven/services/bluetoothd.toml` to `/etc/raven/init.d/`,
   `sudo raven-rc reload && sudo raven-rc start bluetoothd`.

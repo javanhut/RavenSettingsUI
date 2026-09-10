@@ -1,9 +1,10 @@
 //! Package updates through `rvn`, the Raven package manager.
 //!
 //! Checking is a read-only dry run any user may perform (it asks the AUR
-//! about foreign packages, so it can take a few seconds). Applying needs root
-//! and streams `makepkg` output for AUR packages, so it is handed to a
-//! terminal running `sudo rvn update` rather than hidden behind a spinner.
+//! about foreign packages, so it can take a few seconds). Applying is
+//! root's work and streams `makepkg` output for AUR packages, so it is
+//! handed to a terminal rather than hidden behind a spinner. Which command
+//! that terminal runs depends on `rvnd`: see [`apply_command`].
 
 use anyhow::Result;
 
@@ -80,9 +81,33 @@ pub fn parse_check(text: &str) -> Check {
     out
 }
 
-/// The command a terminal should run to apply everything.
+/// rvnd's socket (RavenPackageManager, `src/daemon.rs`): group `wheel`,
+/// mode 0660, the door through which an unprivileged `rvn` installs.
+pub const DAEMON_SOCKET: &str = "/run/rvn/ctl";
+
+/// Whether this account can reach rvnd. A connect that succeeds is the
+/// whole test: the socket's mode is its access control, so a refusal means
+/// no daemon or not in its group, and either way `rvn update` on its own
+/// would stop with an error.
+pub fn via_daemon() -> bool {
+    std::os::unix::net::UnixStream::connect(DAEMON_SOCKET).is_ok()
+}
+
+/// The command a terminal should run to apply everything. With rvnd
+/// reachable it is plain `rvn update`: rvn sends the request over
+/// `/run/rvn/ctl` itself and the daemon, already root, runs the update.
+/// That is the socket-and-group path ARCHITECTURE.md asks for, and no
+/// password is involved. Without the daemon the only way to root is sudo,
+/// which runs in the terminal the user is looking at -- never from this
+/// process (see `backend::terminal`). Either way the terminal is where the
+/// plan is confirmed and makepkg's output lands.
 pub fn apply_command() -> Vec<String> {
-    vec!["sudo".into(), "rvn".into(), "update".into()]
+    let mut cmd: Vec<String> = Vec::new();
+    if !via_daemon() {
+        cmd.push("sudo".into());
+    }
+    cmd.extend(["rvn".into(), "update".into()]);
+    cmd
 }
 
 /// Whether Raven Store, the graphical front-end for rvn, is installed.

@@ -360,29 +360,18 @@ fn wallpaper_card(app: &Rc<App>, preview: &Rc<Preview>) -> gtk::Box {
 }
 
 /// Without RavenCanvas the compositor draws the root-owned system wallpaper
-/// (or desktop.toml's, once it reloads). Offer the command that installs the
-/// pick system-wide, since that needs a password.
+/// (or desktop.toml's, once it reloads). The per-user copy is already saved;
+/// installing it system-wide is root's work with no daemon to ask, so it is
+/// offered as a command for the user's terminal (see backend::terminal).
 fn offer_system_install(app: &Rc<App>, dest: &std::path::Path) {
     let cmd = integrations::system_wallpaper_command(dest);
-    let d = libadwaita::AlertDialog::new(
-        Some("Apply to the desktop background?"),
-        Some("Saved for your account and used by the desktop. To make it the machine's wallpaper (the login screen too), copy this command and run it in a terminal:"),
+    crate::ui::offer_terminal(
+        app,
+        "Apply to the desktop background?",
+        "Saved for your account and used by the desktop. To make it the machine's wallpaper (the login screen too), it has to be copied into /usr/share/wallpaper/set, which only root can write.",
+        &cmd,
+        |_| {},
     );
-    let entry = gtk::Entry::builder().text(&cmd).editable(false).build();
-    entry.add_css_class("mono");
-    d.set_extra_child(Some(&entry));
-    d.add_response("copy", "Copy command");
-    d.add_response("close", "Close");
-    d.set_default_response(Some("copy"));
-    let app2 = app.clone();
-    d.connect_response(None, move |_, r| {
-        if r == "copy" {
-            app2.window().clipboard().set_text(&cmd);
-            app2.toast("Command copied");
-        }
-    });
-    use libadwaita::prelude::*;
-    d.present(Some(&app.window()));
 }
 
 fn effects_card(app: &Rc<App>) -> gtk::Box {

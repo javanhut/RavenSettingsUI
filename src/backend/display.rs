@@ -275,3 +275,31 @@ pub fn set_brightness(b: &Backlight, percent: f64) -> Result<()> {
 
 /// The udev rule that lets the session set brightness without root.
 pub const UDEV_RULE: &str = r#"ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness""#;
+
+/// The command that installs [`UDEV_RULE`] and applies it to the devices
+/// already present. Both halves are root's; the page runs this in the
+/// user's terminal (see `backend::terminal`), never from this process.
+pub fn udev_rule_command() -> Vec<String> {
+    let script = format!(
+        "printf '%s\\n' {rule} > /etc/udev/rules.d/90-backlight.rules && chgrp video /sys/class/backlight/*/brightness && chmod g+w /sys/class/backlight/*/brightness",
+        rule = crate::backend::terminal::shell_quote(UDEV_RULE),
+    );
+    vec!["sudo".into(), "sh".into(), "-c".into(), script]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn udev_rule_command_writes_the_rule_verbatim() {
+        let cmd = udev_rule_command();
+        assert_eq!(&cmd[..3], ["sudo", "sh", "-c"]);
+        // What printf hands to the file is the rule, quotes and all.
+        let out = std::process::Command::new("sh")
+            .args(["-c", cmd[3].split(" > ").next().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), UDEV_RULE);
+    }
+}

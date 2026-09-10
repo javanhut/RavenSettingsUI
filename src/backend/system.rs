@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 
 /// raven-powerd's socket: the desktop's logind stand-in. Group `video`.
 pub const POWER_SOCKET: &str = "/run/raven-power/ctl";
@@ -209,22 +209,32 @@ pub fn power_policy() -> Result<PowerPolicy> {
     })
 }
 
-/// Rewrite one key of the power policy. Needs root, so this is run through
-/// `sudo -n`; the caller shows the manual command when that is refused.
-pub fn set_power_policy(table: &str, key: &str, value: &str) -> Result<()> {
+impl PowerPolicy {
+    /// The action recorded under `[table] key`, for the page to check that
+    /// an edit made in a terminal has landed.
+    pub fn get(&self, table: &str, key: &str) -> Option<&str> {
+        match (table, key) {
+            ("buttons", "power") => Some(&self.power_button),
+            ("buttons", "sleep") => Some(&self.sleep_button),
+            ("lid", "close") => Some(&self.lid_close),
+            _ => None,
+        }
+    }
+}
+
+/// The command that rewrites one key of the power policy and restarts
+/// raven-powerd to read it. The file is root's and raven-powerd's socket
+/// takes only `suspend`, `poweroff` and `reboot` -- there is no verb for
+/// changing policy -- so the page runs this in the user's terminal (see
+/// `backend::terminal`); it is never run from this process.
+pub fn power_policy_command(table: &str, key: &str, value: &str) -> Result<Vec<String>> {
     if !["suspend", "poweroff", "reboot", "ignore"].contains(&value) {
         bail!("{value} is not a power action");
     }
     let script = format!(
         "sed -i '/^\\[{table}\\]/,/^\\[/ s/^{key} = .*/{key} = \"{value}\"/' {POWER_POLICY} && raven-rc restart powerd"
     );
-    let out = std::process::Command::new("sudo")
-        .args(["-n", "sh", "-c", &script])
-        .output()?;
-    if !out.status.success() {
-        return Err(anyhow!("needs root. Run:\n  sudo sh -c '{script}'"));
-    }
-    Ok(())
+    Ok(vec!["sudo".into(), "sh".into(), "-c".into(), script])
 }
 
 pub fn locale() -> String {
@@ -236,6 +246,21 @@ pub fn locale() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn power_policy_command_is_a_script_sh_accepts() {
+        let cmd = power_policy_command("lid", "close", "ignore").unwrap();
+        assert_eq!(&cmd[..3], ["sudo", "sh", "-c"]);
+        assert!(cmd[3].contains("close = \"ignore\""));
+        assert!(cmd[3].ends_with("raven-rc restart powerd"));
+        let ok = std::process::Command::new("sh")
+            .args(["-n", "-c", &cmd[3]])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(true);
+        assert!(ok, "sh -n rejected {}", cmd[3]);
+        assert!(power_policy_command("lid", "close", "rm -rf /").is_err());
+    }
 
     #[test]
     fn os_release_parses_quotes() {

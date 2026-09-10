@@ -1,5 +1,5 @@
 //! Updates: check with `rvn update --dry-run`, apply in Raven Store or a
-//! terminal.
+//! terminal (through rvnd where it runs; see `backend::updates`).
 //!
 //! A check here runs as the user, so rvn syncs the databases into a
 //! per-user copy when it cannot write the system one. Later checks — here,
@@ -16,7 +16,7 @@ use gtk4 as gtk;
 use libadwaita as adw;
 use libadwaita::prelude::*;
 
-use crate::backend::{system, updates};
+use crate::backend::{system, terminal, updates};
 use crate::ui::{spawn, widgets, App};
 
 thread_local! {
@@ -73,9 +73,11 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     content.append(&list_card);
 
     content.append(&widgets::dim_label(if updates::store_available() {
-        "Installing opens Raven Store, which shows progress and asks for your password. Packages from the AUR are built on this machine."
+        "Installing opens Raven Store, which shows progress. Packages from the AUR are built on this machine."
+    } else if updates::via_daemon() {
+        "Installing runs `rvn update` in your terminal so you can confirm the plan and watch it. rvnd does the root part, so no password is asked. Packages from the AUR are built on this machine."
     } else {
-        "Installing runs `sudo rvn update` in your terminal so you can watch it and answer prompts. Packages from the AUR are built on this machine."
+        "Installing runs `sudo rvn update` in your terminal so you can watch it and answer prompts; sudo asks for your password there. Packages from the AUR are built on this machine."
     }));
 
     // When the last check started, so the database watcher can tell a
@@ -160,9 +162,10 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     {
         let app = app.clone();
         install.connect_clicked(move |_| {
-            // Raven Store shows progress in a window and handles the
-            // password prompt; a terminal is the fallback for images
-            // without it, and for people who prefer one.
+            // Raven Store shows progress in a window; a terminal is the
+            // fallback for images without it, and for people who prefer
+            // one. Either way the root part is rvnd's where it runs, and
+            // otherwise sudo's in that terminal -- never this process's.
             if updates::store_available() {
                 match updates::open_store() {
                     Ok(()) => app.toast("Opening Raven Store"),
@@ -171,7 +174,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                 return;
             }
             let terminal = app.config.borrow().general.terminal.clone();
-            match launch_in_terminal(&terminal, &updates::apply_command()) {
+            match terminal::run(&terminal, &updates::apply_command()) {
                 Ok(()) => app.toast("Updating in a terminal window"),
                 Err(e) => app.error("Could not open a terminal", &e),
             }
@@ -260,34 +263,4 @@ fn watch_databases(do_check: Rc<dyn Fn(bool)>, checked_at: Rc<Cell<Option<Instan
         });
         MONITORS.with(|m| m.borrow_mut().push(monitor));
     }
-}
-
-/// Run a command in the user's terminal. `-e` is what nearly every emulator
-/// accepts; GIO's own terminal lookup is the fallback.
-fn launch_in_terminal(terminal: &str, cmd: &[String]) -> anyhow::Result<()> {
-    let script = format!(
-        "{}; echo; echo 'Done. Press Enter to close.'; read _",
-        cmd.iter()
-            .map(|c| format!("'{c}'"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    if crate::util::have(terminal) {
-        let spawned = std::process::Command::new(terminal)
-            .args(["-e", "sh", "-c", &script])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        if spawned.is_ok() {
-            return Ok(());
-        }
-    }
-    let info = gio::AppInfo::create_from_commandline(
-        format!("sh -c \"{}\"", script.replace('"', "\\\"")),
-        None,
-        gio::AppInfoCreateFlags::NEEDS_TERMINAL,
-    )?;
-    info.launch(&[], None::<&gio::AppLaunchContext>)?;
-    Ok(())
 }

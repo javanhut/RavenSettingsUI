@@ -207,15 +207,27 @@ fn fill_backlight(app: &Rc<App>, body: &gtk::Box) {
     }
     for bl in lights {
         if !bl.writable {
-            let b = widgets::banner("Brightness is read-only for this account. Add the udev rule from the README to let the video group set it.");
-            b.set_button_label(Some("Copy rule"));
+            let b = widgets::banner("Brightness is read-only for this account. A udev rule lets the video group set it.");
+            b.set_button_label(Some("Install rule…"));
             let app2 = app.clone();
             b.connect_button_clicked(move |_| {
-                app2.window().clipboard().set_text(&format!(
-                    "echo '{}' | sudo tee /etc/udev/rules.d/90-backlight.rules && sudo chgrp video /sys/class/backlight/*/brightness && sudo chmod g+w /sys/class/backlight/*/brightness",
-                    display::UDEV_RULE
-                ));
-                app2.toast("Command copied");
+                // /etc/udev/rules.d and the sysfs node are root's, and
+                // raven-controlsd's socket covers the keyboard backlight
+                // and fans, not the display, so the rule is installed in a
+                // terminal the user authorises (see backend::terminal).
+                let cmd = display::udev_rule_command();
+                let app3 = app2.clone();
+                crate::ui::offer_terminal(
+                    &app2,
+                    "Let this account set brightness?",
+                    "The rule hands /sys/class/backlight/*/brightness to the video group, which the session already holds for the screen. It is applied to the current device too, so no reboot is needed.",
+                    &cmd,
+                    move |ran| {
+                        if ran {
+                            app3.toast("Reopen Display once it finishes");
+                        }
+                    },
+                );
             });
             body.append(&b);
         }
