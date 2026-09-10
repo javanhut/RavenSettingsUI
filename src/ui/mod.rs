@@ -59,7 +59,11 @@ impl App {
     /// to RoostBar and GTK in the background.
     pub fn save(self: &Rc<Self>) {
         let cfg = self.config.borrow().clone();
-        theme::apply(cfg.appearance.theme_mode, &cfg.appearance.accent, cfg.appearance.transparency);
+        theme::apply(
+            cfg.appearance.theme_mode,
+            &cfg.appearance.accent,
+            cfg.appearance.transparency,
+        );
         if let Err(e) = cfg.save() {
             self.error("Could not save settings", &e);
             return;
@@ -130,14 +134,22 @@ pub fn run() -> glib::ExitCode {
         theme::load_base();
         {
             let cfg = app.config.borrow();
-            theme::apply(cfg.appearance.theme_mode, &cfg.appearance.accent, cfg.appearance.transparency);
+            theme::apply(
+                cfg.appearance.theme_mode,
+                &cfg.appearance.accent,
+                cfg.appearance.transparency,
+            );
         }
         let window = window::build(gtk_app, &app);
         *app.window.borrow_mut() = Some(window.clone());
         WINDOW.with(|w| *w.borrow_mut() = Some(window.clone()));
         {
             let cfg = app.config.borrow();
-            theme::apply(cfg.appearance.theme_mode, &cfg.appearance.accent, cfg.appearance.transparency);
+            theme::apply(
+                cfg.appearance.theme_mode,
+                &cfg.appearance.accent,
+                cfg.appearance.transparency,
+            );
         }
         window.present();
         if let Ok(size) = std::env::var("RAVEN_SETTINGS_SNAPSHOT_SIZE") {
@@ -294,7 +306,13 @@ fn snapshot_pages(window: &adw::ApplicationWindow, dir: std::path::PathBuf) {
     glib::timeout_add_local_once(std::time::Duration::from_millis(2500), move || {
         let ids: Vec<&'static str> = pages::all().iter().map(|p| p.id).collect();
         let (min, nat) = window.preferred_size();
-        tracing::info!("window min {}x{} natural {}x{}", min.width(), min.height(), nat.width(), nat.height());
+        tracing::info!(
+            "window min {}x{} natural {}x{}",
+            min.width(),
+            min.height(),
+            nat.width(),
+            nat.height()
+        );
         let stack = find_stack(window.upcast_ref()).expect("no stack");
         let nav = find_nav(window.upcast_ref());
         let mut i = 0usize;

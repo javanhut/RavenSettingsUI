@@ -32,9 +32,8 @@ struct Page {
 pub fn build(app: &Rc<App>) -> gtk::Widget {
     let (root, content) = widgets::page("Network", "Wi-Fi and wired connections, managed by cawd.");
 
-    let daemon_banner = widgets::banner(
-        "cawd is not running, so Wi-Fi is off. Use the switch below to start it.",
-    );
+    let daemon_banner =
+        widgets::banner("cawd is not running, so Wi-Fi is off. Use the switch below to start it.");
     daemon_banner.set_visible(false);
     content.append(&daemon_banner);
 

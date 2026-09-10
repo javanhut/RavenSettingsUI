@@ -205,27 +205,293 @@ pub fn sync_gtk(cfg: &DesktopConfig) -> Result<()> {
 /// system-wide is offered as a privileged command.
 pub const SYSTEM_WALLPAPER_DIR: &str = "/usr/share/wallpaper/set";
 
+/// The most a wallpaper file may weigh. Mirrors `MAX_FILE_BYTES` in
+/// RavenCanvas's `raven-paint`, which refuses anything larger before it
+/// decodes a byte; checking here means the refusal lands in this window
+/// with a reason, rather than in the daemon's log after the file is copied.
+pub const MAX_WALLPAPER_BYTES: u64 = 100 * 1024 * 1024;
+
+/// The widest a converted movie is made. A wallpaper is scaled to the screen
+/// by the daemon anyway, and every WebP frame is decoded in software for the
+/// life of the session, so 4K source video is cut down rather than played at
+/// full size. Sources narrower than this are left alone.
+pub const MOTION_MAX_WIDTH: u32 = 1920;
+
+/// Frames per second of a converted movie. Wallpapers do not need more, and
+/// the decode cost is linear in it.
+pub const MOTION_FPS: u32 = 24;
+
+/// Still-picture extensions the desktop and the daemon both draw.
+const IMAGE_EXTS: [&str; 3] = ["png", "jpg", "jpeg"];
+/// Video containers ffmpeg is asked to convert. Anything it can demux would
+/// do; these are the ones a "live wallpaper" download actually arrives as.
+const VIDEO_EXTS: [&str; 4] = ["mp4", "webm", "mkv", "mov"];
+
+/// What a chosen file is, decided by extension. The daemon sniffs the bytes
+/// itself and refuses a mislabelled file with its own message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WallpaperKind {
+    /// PNG or JPEG: `ravencanvas set image`.
+    Image,
+    /// An animated WebP, used as-is: `ravencanvas set motion`.
+    Motion,
+    /// A video, converted to an animated WebP first, then `set motion`.
+    Video,
+}
+
+impl WallpaperKind {
+    pub fn of(path: &Path) -> Option<Self> {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())?;
+        if IMAGE_EXTS.contains(&ext.as_str()) {
+            Some(Self::Image)
+        } else if ext == "webp" {
+            Some(Self::Motion)
+        } else if VIDEO_EXTS.contains(&ext.as_str()) {
+            Some(Self::Video)
+        } else {
+            None
+        }
+    }
+
+    /// The `ravencanvas set <THING>` word for the installed file.
+    pub fn canvas_mode(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Motion | Self::Video => "motion",
+        }
+    }
+}
+
+/// The user's installed wallpaper: what the daemon plays, and a still of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledWallpaper {
+    pub kind: WallpaperKind,
+    /// The file handed to `ravencanvas set`.
+    pub path: PathBuf,
+    /// A PNG or JPEG that looks like `path`. For an image it is `path`
+    /// itself; for a movie it is the first frame, when ffmpeg could write
+    /// one. This is what the thumbnail shows and what desktop.toml records,
+    /// because Huginn draws that field itself when the daemon is not running
+    /// and it draws stills only.
+    pub still: Option<PathBuf>,
+}
+
 pub fn user_wallpaper_dir() -> PathBuf {
     crate::config::data_dir().join("wallpaper")
 }
 
-pub fn install_user_wallpaper(src: &Path) -> Result<PathBuf> {
-    let ext = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    if !["png", "jpg", "jpeg"].contains(&ext.as_str()) {
-        bail!("the desktop draws PNG and JPEG wallpapers only");
+/// Whether a video can be converted here at all.
+pub fn can_convert_video() -> bool {
+    have("ffmpeg")
+}
+
+/// The ffmpeg invocation that turns a video into a looping animated WebP.
+///
+/// `quality` is libwebp's 0-100 scale; `max_width` and `fps` cap the output.
+/// Audio is dropped, the loop count is set to forever, and stdin is closed so
+/// a prompt about overwriting can never hang a background thread.
+pub fn convert_command(
+    src: &Path,
+    dest: &Path,
+    max_width: u32,
+    fps: u32,
+    quality: u32,
+) -> Vec<String> {
+    // scale to at most max_width wide, keeping the aspect and even dimensions
+    // (libwebp wants even sizes; -2 rounds the height that way).
+    let vf = format!("scale='min({max_width},iw)':-2,fps={fps}");
+    [
+        "ffmpeg",
+        "-y",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        &src.to_string_lossy(),
+        "-an",
+        "-vf",
+        &vf,
+        "-c:v",
+        "libwebp",
+        "-q:v",
+        &quality.to_string(),
+        "-loop",
+        "0",
+        &dest.to_string_lossy(),
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// Write the first frame of `src` (a video or animated WebP) to `dest` as a
+/// PNG. Best effort: a still is a convenience for the thumbnail and Huginn's
+/// fallback, not something a live wallpaper needs to play.
+fn write_still(src: &Path, dest: &Path) -> Option<PathBuf> {
+    if !have("ffmpeg") {
+        return None;
+    }
+    let vf = format!("scale='min({MOTION_MAX_WIDTH},iw)':-2");
+    let args = [
+        "-y",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        &src.to_string_lossy(),
+        "-an",
+        "-vf",
+        &vf,
+        "-frames:v",
+        "1",
+        &dest.to_string_lossy(),
+    ];
+    match run("ffmpeg", &args) {
+        Ok(_) if dest.is_file() => Some(dest.to_path_buf()),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::debug!("no still for {}: {e:#}", src.display());
+            None
+        }
+    }
+}
+
+/// Convert `src` to an animated WebP at `dest`, retrying smaller when the
+/// result is over the daemon's file limit.
+fn convert_video(src: &Path, dest: &Path) -> Result<()> {
+    if !can_convert_video() {
+        bail!("converting a video to a live wallpaper needs ffmpeg, which is not installed");
+    }
+    // Each step trades quality for size; most clips fit on the first.
+    let attempts = [
+        (MOTION_MAX_WIDTH, MOTION_FPS, 70),
+        (MOTION_MAX_WIDTH, MOTION_FPS, 50),
+        (1280, 20, 50),
+    ];
+    let mut last = 0;
+    for (w, fps, q) in attempts {
+        let cmd = convert_command(src, dest, w, fps, q);
+        let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
+        run(&cmd[0], &args).context("ffmpeg could not convert the video")?;
+        last = std::fs::metadata(dest)?.len();
+        if last <= MAX_WALLPAPER_BYTES {
+            return Ok(());
+        }
+        tracing::info!(
+            "{} is {} at {w}px/{fps}fps/q{q}; trying smaller",
+            dest.display(),
+            crate::util::human_bytes(last)
+        );
+    }
+    let _ = std::fs::remove_file(dest);
+    bail!(
+        "even at 1280px and 20 fps the converted movie is {}, past the {} limit; use a shorter clip",
+        crate::util::human_bytes(last),
+        crate::util::human_bytes(MAX_WALLPAPER_BYTES)
+    )
+}
+
+pub fn install_user_wallpaper(src: &Path) -> Result<InstalledWallpaper> {
+    let Some(kind) = WallpaperKind::of(src) else {
+        bail!("the desktop draws PNG and JPEG pictures, animated WebP, and videos it can convert to WebP");
+    };
+    let size = std::fs::metadata(src)
+        .with_context(|| format!("cannot read {}", src.display()))?
+        .len();
+    // A video is allowed to be larger: it is converted, not copied, and the
+    // limit applies to what comes out.
+    if kind != WallpaperKind::Video && size > MAX_WALLPAPER_BYTES {
+        bail!(
+            "{} is {}, past the {} limit for a wallpaper",
+            src.display(),
+            crate::util::human_bytes(size),
+            crate::util::human_bytes(MAX_WALLPAPER_BYTES)
+        );
     }
     let dir = user_wallpaper_dir();
     std::fs::create_dir_all(&dir)?;
+    // Build the new set in a staging directory so a failed conversion (which
+    // can take minutes on a long clip) leaves the current wallpaper intact.
+    let stage = dir.join(format!(".new.{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&stage);
+    std::fs::create_dir_all(&stage)?;
+    let built = install_into(src, kind, &stage);
+    let built = match built {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&stage);
+            return Err(e);
+        }
+    };
     for old in std::fs::read_dir(&dir)?.flatten() {
-        let _ = std::fs::remove_file(old.path());
+        if old.path() != stage {
+            let _ = std::fs::remove_file(old.path());
+        }
     }
-    let dest = dir.join(format!("wallpaper.{ext}"));
-    std::fs::copy(src, &dest).with_context(|| format!("copying {}", src.display()))?;
-    Ok(dest)
+    let mut out = InstalledWallpaper {
+        kind,
+        path: dir.join(built.path.file_name().unwrap()),
+        still: built
+            .still
+            .as_ref()
+            .map(|s| dir.join(s.file_name().unwrap())),
+    };
+    std::fs::rename(&built.path, &out.path)?;
+    if let Some(s) = &built.still {
+        if let Some(dest) = &out.still {
+            if std::fs::rename(s, dest).is_err() {
+                out.still = None;
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&stage);
+    Ok(out)
+}
+
+fn install_into(src: &Path, kind: WallpaperKind, dir: &Path) -> Result<InstalledWallpaper> {
+    match kind {
+        WallpaperKind::Image => {
+            let ext = src
+                .extension()
+                .unwrap()
+                .to_string_lossy()
+                .to_ascii_lowercase();
+            let dest = dir.join(format!("wallpaper.{ext}"));
+            std::fs::copy(src, &dest).with_context(|| format!("copying {}", src.display()))?;
+            Ok(InstalledWallpaper {
+                kind,
+                still: Some(dest.clone()),
+                path: dest,
+            })
+        }
+        WallpaperKind::Motion => {
+            let dest = dir.join("wallpaper.webp");
+            std::fs::copy(src, &dest).with_context(|| format!("copying {}", src.display()))?;
+            let still = write_still(&dest, &dir.join("still.png"));
+            Ok(InstalledWallpaper {
+                kind,
+                path: dest,
+                still,
+            })
+        }
+        WallpaperKind::Video => {
+            let dest = dir.join("wallpaper.webp");
+            convert_video(src, &dest)?;
+            // From the source, not the WebP: every ffmpeg demuxes an MP4,
+            // and only recent ones open an animated WebP.
+            let still = write_still(src, &dir.join("still.png"));
+            Ok(InstalledWallpaper {
+                kind,
+                path: dest,
+                still,
+            })
+        }
+    }
 }
 
 /// Set the wallpaper the way Raven does it: through RavenCanvas, which draws
@@ -233,16 +499,21 @@ pub fn install_user_wallpaper(src: &Path) -> Result<PathBuf> {
 /// `~/.config/raven/canvas.toml`. No root needed. Returns false when
 /// `ravencanvas` is not installed, in which case the compositor's own
 /// fallback (desktop.toml's `wallpaper`) is all that applies.
-pub fn set_wallpaper_via_canvas(path: &Path) -> Result<bool> {
+pub fn set_wallpaper_via_canvas(w: &InstalledWallpaper) -> Result<bool> {
     if !have("ravencanvas") {
         return Ok(false);
     }
     run(
         "ravencanvas",
-        &["set", "image", &path.to_string_lossy(), "--persist"],
+        &[
+            "set",
+            w.kind.canvas_mode(),
+            &w.path.to_string_lossy(),
+            "--persist",
+        ],
     )
     .map(|_| true)
-    .context("ravencanvas refused the image")
+    .context("ravencanvas refused the file")
 }
 
 /// The command that puts a wallpaper where the compositor reads it. The
@@ -339,6 +610,43 @@ mod tests {
             .map(|s| s.success())
             .unwrap_or(true);
         assert!(ok, "sh -n rejected {}", cmd[3]);
+    }
+
+    #[test]
+    fn wallpaper_kind_by_extension() {
+        use WallpaperKind::*;
+        assert_eq!(WallpaperKind::of(Path::new("a.PNG")), Some(Image));
+        assert_eq!(WallpaperKind::of(Path::new("a.jpeg")), Some(Image));
+        assert_eq!(WallpaperKind::of(Path::new("rain.webp")), Some(Motion));
+        assert_eq!(WallpaperKind::of(Path::new("clip.mp4")), Some(Video));
+        assert_eq!(WallpaperKind::of(Path::new("clip.MKV")), Some(Video));
+        assert_eq!(WallpaperKind::of(Path::new("a.gif")), None);
+        assert_eq!(WallpaperKind::of(Path::new("noext")), None);
+        assert_eq!(Image.canvas_mode(), "image");
+        assert_eq!(Motion.canvas_mode(), "motion");
+        assert_eq!(Video.canvas_mode(), "motion");
+    }
+
+    #[test]
+    fn convert_command_shape() {
+        let cmd = convert_command(
+            Path::new("/in/a b.mp4"),
+            Path::new("/out/w.webp"),
+            1920,
+            24,
+            70,
+        );
+        assert_eq!(cmd[0], "ffmpeg");
+        // Each argument is its own argv entry, so a space in the path is safe.
+        assert!(cmd.contains(&"/in/a b.mp4".to_string()));
+        assert!(cmd.contains(&"-nostdin".to_string()));
+        assert!(cmd.contains(&"-an".to_string()));
+        assert!(cmd.contains(&"scale='min(1920,iw)':-2,fps=24".to_string()));
+        let q = cmd.iter().position(|a| a == "-q:v").unwrap();
+        assert_eq!(cmd[q + 1], "70");
+        let l = cmd.iter().position(|a| a == "-loop").unwrap();
+        assert_eq!(cmd[l + 1], "0");
+        assert_eq!(cmd.last().unwrap(), "/out/w.webp");
     }
 
     #[test]

@@ -1,9 +1,9 @@
 //! The look: Raven's palette as libadwaita named colours, plus the card
 //! layout from the mockup. Accent is swapped at runtime by a second provider.
 
+use gtk::prelude::*;
 use gtk4 as gtk;
 use libadwaita as adw;
-use gtk::prelude::*;
 
 use crate::config::ThemeMode;
 
@@ -187,7 +187,11 @@ thread_local! {
 /// Point every `@accent_bg_color` at the chosen hex, and set light/dark.
 pub fn apply(mode: ThemeMode, accent: &str, glass: bool) {
     if let Some(w) = super::main_window() {
-        if glass { w.add_css_class("glass"); } else { w.remove_css_class("glass"); }
+        if glass {
+            w.add_css_class("glass");
+        } else {
+            w.remove_css_class("glass");
+        }
     }
     let manager = adw::StyleManager::default();
     manager.set_color_scheme(match mode {

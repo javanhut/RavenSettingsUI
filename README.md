@@ -52,7 +52,7 @@ shadows = true
 blur = true
 smooth_animations = true
 animation_speed = "normal"   # slow | normal | fast
-wallpaper = ""               # per-user copy under ~/.local/share/raven/wallpaper/
+wallpaper = ""               # a still, under ~/.local/share/raven/wallpaper/ (first frame of a live one)
 
 [general]
 terminal = "raven-terminal"
@@ -87,8 +87,17 @@ On every save the app also:
   Quick settings has an "All settings" row that opens this app, and
   `Super+Ctrl+P` does the same.
 - **RavenCanvas** gets the wallpaper directly: the Appearance page runs
-  `ravencanvas set image <file> --persist`, which draws it on the desktop and
-  the login screen and persists it in `~/.config/raven/canvas.toml`.
+  `ravencanvas set image <file> --persist` for a PNG or JPEG and
+  `ravencanvas set motion <file> --persist` for an animated WebP, which draws
+  it on the desktop and the login screen and persists it in
+  `~/.config/raven/canvas.toml`. A video (MP4, WebM, MKV, MOV) is offered in
+  the picker only when `ffmpeg` is installed; it is converted once, here, to
+  a looping animated WebP — at most 1920 wide and 24 fps, retried smaller
+  until it fits RavenCanvas's 100 MiB file limit — because the daemon plays
+  WebP and nothing else, on purpose (see RavenCanvas's README, "Live
+  wallpapers, and why they are not MP4s"). `desktop.toml` gets a PNG of the
+  first frame, since Huginn draws that field itself when the daemon is not
+  running and it draws stills only.
 - **RoostBar** and **GTK** are written to on every save, as above.
 
 - `appearance.transparency` makes this window glass (translucent), and

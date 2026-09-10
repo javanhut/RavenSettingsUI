@@ -57,8 +57,12 @@ pub struct Appearance {
     pub blur: bool,
     pub smooth_animations: bool,
     pub animation_speed: AnimationSpeed,
-    /// Absolute path of the wallpaper the user picked. Empty means the
-    /// image's default (`/usr/share/wallpaper/set/wallpaper.*`).
+    /// Absolute path of a still picture of the wallpaper the user picked.
+    /// Empty means the image's default (`/usr/share/wallpaper/set/wallpaper.*`).
+    /// For a live wallpaper this is the first frame as a PNG; the movie
+    /// itself is RavenCanvas's business (`~/.config/raven/canvas.toml`), and
+    /// Huginn, which reads this field when the daemon is not running, draws
+    /// stills only.
     pub wallpaper: String,
 }
 

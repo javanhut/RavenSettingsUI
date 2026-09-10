@@ -303,10 +303,20 @@ fn wallpaper_card(app: &Rc<App>, preview: &Rc<Preview>) -> gtk::Box {
         let app = app.clone();
         let preview = preview.clone();
         browse.connect_clicked(move |b| {
+            // Stills the desktop draws itself, animated WebP the daemon
+            // plays, and videos that get converted to one on the way in.
             let filter = gtk::FileFilter::new();
-            filter.set_name(Some("Images"));
+            filter.set_name(Some("Wallpapers"));
             filter.add_mime_type("image/png");
             filter.add_mime_type("image/jpeg");
+            filter.add_mime_type("image/webp");
+            if integrations::can_convert_video() {
+                filter.set_name(Some("Wallpapers and videos"));
+                filter.add_mime_type("video/mp4");
+                filter.add_mime_type("video/webm");
+                filter.add_mime_type("video/x-matroska");
+                filter.add_mime_type("video/quicktime");
+            }
             let filters = gio::ListStore::new::<gtk::FileFilter>();
             filters.append(&filter);
             let dialog = gtk::FileDialog::builder()
@@ -323,28 +333,42 @@ fn wallpaper_card(app: &Rc<App>, preview: &Rc<Preview>) -> gtk::Box {
                 let Ok(file) = res else { return };
                 let Some(src) = file.path() else { return };
                 b.set_sensitive(false);
+                if integrations::WallpaperKind::of(&src) == Some(integrations::WallpaperKind::Video) {
+                    // ffmpeg on a long clip is minutes, not seconds; say so
+                    // rather than leave a greyed button as the only sign.
+                    app.toast("Converting the video to a live wallpaper…");
+                }
                 let app2 = app.clone();
                 let preview = preview.clone();
                 let set_thumb = set_thumb.clone();
                 let b = b.clone();
                 spawn(
                     move || {
-                        let dest = integrations::install_user_wallpaper(&src)?;
-                        let via = integrations::set_wallpaper_via_canvas(&dest);
-                        Ok::<_, anyhow::Error>((dest, via))
+                        let w = integrations::install_user_wallpaper(&src)?;
+                        let via = integrations::set_wallpaper_via_canvas(&w);
+                        Ok::<_, anyhow::Error>((w, via))
                     },
                     move |res| {
                         b.set_sensitive(true);
                         match res {
-                            Ok((dest, via_canvas)) => {
+                            Ok((w, via_canvas)) => {
+                                // desktop.toml gets the still: Huginn draws
+                                // that field itself when the daemon is not
+                                // running, and it draws pictures only.
+                                let recorded = w.still.clone().unwrap_or_else(|| w.path.clone());
                                 app2.config.borrow_mut().appearance.wallpaper =
-                                    dest.to_string_lossy().to_string();
+                                    recorded.to_string_lossy().to_string();
                                 app2.save();
-                                set_thumb(Some(dest.clone()));
+                                set_thumb(Some(recorded.clone()));
                                 preview.refresh(&app2);
+                                let motion = w.kind != integrations::WallpaperKind::Image;
                                 match via_canvas {
+                                    Ok(true) if motion => app2.toast("Live wallpaper set"),
                                     Ok(true) => app2.toast("Wallpaper set"),
-                                    Ok(false) => offer_system_install(&app2, &dest),
+                                    Ok(false) if motion => app2.toast(
+                                        "Saved, but a live wallpaper needs RavenCanvas, which is not installed",
+                                    ),
+                                    Ok(false) => offer_system_install(&app2, &recorded),
                                     Err(e) => app2.error("RavenCanvas", &e),
                                 }
                             }
