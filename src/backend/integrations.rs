@@ -28,9 +28,9 @@ pub fn sync_roostbar(cfg: &DesktopConfig) -> Result<()> {
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let dark = !matches!(cfg.appearance.theme_mode, ThemeMode::Light);
     let (bg, fg, muted) = if dark {
-        ("#D916161F", "#C0CAF5", "#565F89")
+        ("#D816161F", "#E8E8F0", "#9A9AB0")
     } else {
-        ("#D9F2F3F8", "#1A1B26", "#8A8FA8")
+        ("#D9F2F2F7", "#1C1C22", "#7A7A90")
     };
     let bg = if cfg.appearance.transparency {
         bg.to_string()
@@ -61,6 +61,28 @@ pub fn sync_roostbar(cfg: &DesktopConfig) -> Result<()> {
     atomic_write(&path, new.as_bytes())
 }
 
+/// Where a trailing comment begins on `line`, if it has one.
+///
+/// A `#` inside a double-quoted string is part of the value, not a comment:
+/// every colour RoostBar takes is written `"#RRGGBB"`, and treating its `#`
+/// as a comment re-appended the old value to the line on every sync.
+fn comment_start(line: &str) -> Option<usize> {
+    let mut quoted = false;
+    let mut chars = line.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            // An escaped character inside a string is never a delimiter.
+            '\\' if quoted => {
+                chars.next();
+            }
+            '"' => quoted = !quoted,
+            '#' if !quoted => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Replace `key = …` lines at the top level; append keys that are absent.
 pub fn rewrite_toml_keys(text: &str, updates: &[(&str, String)]) -> String {
     let mut seen = vec![false; updates.len()];
@@ -79,9 +101,7 @@ pub fn rewrite_toml_keys(text: &str, updates: &[(&str, String)]) -> String {
                     .map(|r| r.trim_start().starts_with('='))
                     .unwrap_or(false);
                 if is_key {
-                    let comment = line
-                        .find('#')
-                        .filter(|&i| i > line.find('=').unwrap_or(0))
+                    let comment = comment_start(line)
                         .map(|i| format!("  {}", line[i..].trim_end()))
                         .unwrap_or_default();
                     out.push_str(&format!("{key} = {value}{comment}\n"));
@@ -647,6 +667,36 @@ mod tests {
         let l = cmd.iter().position(|a| a == "-loop").unwrap();
         assert_eq!(cmd[l + 1], "0");
         assert_eq!(cmd.last().unwrap(), "/out/w.webp");
+    }
+
+    #[test]
+    fn a_hash_inside_a_quoted_value_is_not_a_comment() {
+        // The bug this guards: every colour is `"#RRGGBB"`, and the old
+        // comment scan took the value's own `#` for a comment, appending the
+        // previous value to the line on every sync.
+        let src = "background = \"#D916161F\"\naccent = \"#7AA2F7\"  # chosen\n";
+        let out = rewrite_toml_keys(
+            src,
+            &[
+                ("background", "\"#FF16161F\"".into()),
+                ("accent", "\"#3B9EFF\"".into()),
+            ],
+        );
+        assert_eq!(
+            out,
+            "background = \"#FF16161F\"\naccent = \"#3B9EFF\"  # chosen\n"
+        );
+        // And it stays put when synced again.
+        let again = rewrite_toml_keys(
+            &out,
+            &[
+                ("background", "\"#FF16161F\"".into()),
+                ("accent", "\"#3B9EFF\"".into()),
+            ],
+        );
+        assert_eq!(again, out);
+        assert_eq!(comment_start("a = \"x\\\"#y\" # z"), Some(12));
+        assert_eq!(comment_start("a = \"#x\""), None);
     }
 
     #[test]

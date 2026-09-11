@@ -1,5 +1,5 @@
-//! The shell of the window: sidebar with navigation, header with search, and
-//! a stack of pages.
+//! The shell of the window: sidebar with search and navigation, a header
+//! bar naming the page, and a stack of pages.
 
 use std::rc::Rc;
 
@@ -33,7 +33,20 @@ pub fn build(gtk_app: &adw::Application, app: &Rc<App>) -> adw::ApplicationWindo
     let title = gtk::Label::new(Some("Settings"));
     title.add_css_class("app-title");
     title.set_xalign(0.0);
+    title.set_margin_start(8);
     sidebar.append(&title);
+
+    // Search sits at the top of the sidebar, where it filters the list
+    // beneath it, rather than in the header bar over the page.
+    let search = gtk::SearchEntry::builder()
+        .placeholder_text("Search")
+        .hexpand(true)
+        .build();
+    search.add_css_class("search");
+    let search_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    search_box.add_css_class("sidebar-search");
+    search_box.append(&search);
+    sidebar.append(&search_box);
     sidebar.append(&user_card());
 
     let nav = gtk::ListBox::new();
@@ -54,10 +67,6 @@ pub fn build(gtk_app: &adw::Application, app: &Rc<App>) -> adw::ApplicationWindo
     sidebar.append(&status);
 
     // Search filters the sidebar by title and keywords.
-    let search = gtk::SearchEntry::builder()
-        .placeholder_text("Search settings…")
-        .hexpand(true)
-        .build();
     {
         let nav = nav.clone();
         let infos2: Vec<PageInfo> = infos.clone();
@@ -83,19 +92,24 @@ pub fn build(gtk_app: &adw::Application, app: &Rc<App>) -> adw::ApplicationWindo
             }
         });
     }
+    let page_title = adw::WindowTitle::new("", "");
     {
         let stack = stack.clone();
+        let page_title = page_title.clone();
         let ids: Vec<&'static str> = infos.iter().map(|i| i.id).collect();
+        let titles: Vec<&'static str> = infos.iter().map(|i| i.title).collect();
         nav.connect_row_selected(move |_, row| {
             if let Some(row) = row {
-                stack.set_visible_child_name(ids[row.index() as usize]);
+                let i = row.index() as usize;
+                stack.set_visible_child_name(ids[i]);
+                page_title.set_title(titles[i]);
             }
         });
     }
     nav.select_row(nav.row_at_index(0).as_ref());
 
     let header = adw::HeaderBar::builder()
-        .title_widget(&search)
+        .title_widget(&page_title)
         .show_title(true)
         .build();
     // A sidebar button, shown only when the pane is too narrow for the
@@ -186,8 +200,20 @@ pub fn build(gtk_app: &adw::Application, app: &Rc<App>) -> adw::ApplicationWindo
 }
 
 fn nav_row(info: &PageInfo) -> gtk::ListBoxRow {
-    let bx = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    bx.append(&gtk::Image::from_icon_name(info.icon));
+    let bx = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    // The icon in a tinted tile: the tint names the section's domain, and
+    // stays the same whatever accent the person chose.
+    let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    tile.add_css_class("nav-icon");
+    tile.add_css_class(info.tint);
+    tile.set_halign(gtk::Align::Center);
+    tile.set_valign(gtk::Align::Center);
+    let icon = gtk::Image::from_icon_name(info.icon);
+    icon.set_halign(gtk::Align::Center);
+    icon.set_valign(gtk::Align::Center);
+    icon.set_vexpand(true);
+    tile.append(&icon);
+    bx.append(&tile);
     let l = gtk::Label::new(Some(info.title));
     l.set_xalign(0.0);
     bx.append(&l);

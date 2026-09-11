@@ -6,11 +6,11 @@ use libadwaita as adw;
 
 /// A page: title, subtitle, and a vertical content box inside a scroller.
 pub fn page(title: &str, subtitle: &str) -> (gtk::ScrolledWindow, gtk::Box) {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 14);
-    content.set_margin_start(26);
-    content.set_margin_end(26);
-    content.set_margin_top(20);
-    content.set_margin_bottom(26);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    content.set_margin_start(30);
+    content.set_margin_end(30);
+    content.set_margin_top(22);
+    content.set_margin_bottom(30);
 
     let head = gtk::Box::new(gtk::Orientation::Vertical, 4);
     head.add_css_class("page-head");
@@ -135,11 +135,11 @@ pub fn segmented(
 /// Two-column grid of cards, as in the mockup. Carries the `columns` class
 /// so [`set_columns_stacked`] can turn it into one column in a narrow pane.
 pub fn two_columns() -> (gtk::Box, gtk::Box, gtk::Box) {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     row.add_css_class("columns");
     row.set_homogeneous(true);
-    let left = gtk::Box::new(gtk::Orientation::Vertical, 14);
-    let right = gtk::Box::new(gtk::Orientation::Vertical, 14);
+    let left = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    let right = gtk::Box::new(gtk::Orientation::Vertical, 16);
     row.append(&left);
     row.append(&right);
     (row, left, right)
