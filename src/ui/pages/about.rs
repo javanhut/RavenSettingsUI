@@ -19,7 +19,12 @@ pub fn build(_app: &Rc<App>) -> gtk::Widget {
     let hero = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     hero.add_css_class("raven-card");
     let theme = gtk::IconTheme::for_display(&gtk::gdk::Display::default().expect("display"));
-    let logo = gtk::Image::from_icon_name(if theme.has_icon("com.ravensettings.Raven") {
+    // The distro's logo, not this app's: it is the OS being described. The
+    // name is what /etc/os-release's LOGO= says, installed by the ISO build
+    // into hicolor; the app icon is the fallback for a system without it.
+    let logo = gtk::Image::from_icon_name(if theme.has_icon("raven-logo") {
+        "raven-logo"
+    } else if theme.has_icon("com.ravensettings.Raven") {
         "com.ravensettings.Raven"
     } else {
         "computer-symbolic"

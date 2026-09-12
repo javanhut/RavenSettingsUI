@@ -118,7 +118,13 @@ pub fn main_window() -> Option<adw::ApplicationWindow> {
 
 pub fn run() -> glib::ExitCode {
     adw::init().expect("could not initialise GTK: is a Wayland display available?");
-    let gtk_app = adw::Application::builder().application_id(APP_ID).build();
+    // `NON_UNIQUE`: every launch is its own process and its own window, so
+    // Settings can be open twice — one page beside another — instead of a
+    // second launch merely raising the first.
+    let gtk_app = adw::Application::builder()
+        .application_id(APP_ID)
+        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .build();
     let app: Rc<App> = Rc::new(App {
         config: RefCell::new(DesktopConfig::load()),
         toasts: adw::ToastOverlay::new(),
