@@ -28,9 +28,9 @@ pub fn sync_roostbar(cfg: &DesktopConfig) -> Result<()> {
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let dark = !matches!(cfg.appearance.theme_mode, ThemeMode::Light);
     let (bg, fg, muted) = if dark {
-        ("#D816161F", "#E8E8F0", "#9A9AB0")
+        ("#D816161F", "#E8E8F0", "#ABABC2")
     } else {
-        ("#D9F2F2F7", "#1C1C22", "#7A7A90")
+        ("#D9F2F2F7", "#1C1C22", "#5E5E72")
     };
     let bg = if cfg.appearance.transparency {
         bg.to_string()
