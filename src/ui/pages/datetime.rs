@@ -77,6 +77,15 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         .title("Time zone")
         .subtitle("Moves /etc/localtime; every app sees the change at once")
         .enable_search(true)
+        // AdwComboRow filters the popup through this expression, and only
+        // through it: with `enable-search` alone the entry appears, matches
+        // nothing, and the list never narrows. The model holds
+        // GtkStringObjects, so the property to read is their "string".
+        .expression(gtk::PropertyExpression::new(
+            gtk::StringObject::static_type(),
+            None::<gtk::Expression>,
+            "string",
+        ))
         .model(&gtk::StringList::new(
             &zones.iter().map(String::as_str).collect::<Vec<_>>(),
         ))

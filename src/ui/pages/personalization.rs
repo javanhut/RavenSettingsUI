@@ -219,7 +219,10 @@ fn pick_app(app: &Rc<App>, chosen: impl Fn(String) + 'static) {
 }
 
 fn bar_card(app: &Rc<App>) -> gtk::Box {
-    let (card, body) = widgets::card("Bar", "RoostBar. Saved to ~/.config/roostbar/config.toml.");
+    let (card, body) = widgets::card(
+        "Bar",
+        "RoostBar. Saved to ~/.config/roostbar/config.toml, which the bar rereads within a few seconds.",
+    );
     let list = widgets::list();
     let pos = adw::ComboRow::builder()
         .title("Position")
@@ -246,7 +249,7 @@ fn bar_card(app: &Rc<App>) -> gtk::Box {
     list.append(&pos);
     let restart = adw::ActionRow::builder()
         .title("Restart the bar")
-        .subtitle("Apply bar changes now")
+        .subtitle("Only needed for a bar too old to reread its config, or one that is not running")
         .build();
     let b = gtk::Button::with_label("Restart");
     b.add_css_class("flat");

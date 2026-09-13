@@ -138,9 +138,13 @@ pub fn rewrite_toml_keys(text: &str, updates: &[(&str, String)]) -> String {
     out
 }
 
-/// Ask RoostBar to reread its config. It has no reload signal, so this is a
-/// restart: the session launcher would start it once, and it re-execs
-/// itself from the same path.
+/// Restart RoostBar, from the Personalization page's button.
+///
+/// Not the ordinary path any more: the bar stats its config on its slow poll
+/// and rereads it when it moves, so `sync_roostbar` alone is enough. This
+/// stays for a bar too old to do that, and for one whose fonts or geometry
+/// left it in a state a reread cannot undo. The session launcher starts the
+/// bar once, so the restart re-execs it from the same path itself.
 pub fn restart_roostbar() -> Result<()> {
     let out = std::process::Command::new("pgrep")
         .args(["-x", "roostbar"])
