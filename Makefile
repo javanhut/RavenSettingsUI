@@ -17,21 +17,23 @@ TARGET_DIR  := target/$(PROFILE)
 all: build
 
 build:
-	cargo build --locked $(CARGO_FLAGS)
+	cargo build --locked --workspace $(CARGO_FLAGS)
 
+# The overlay is built too, so the Key Overlay page finds it beside raven-settings.
 run:
-	cargo run $(CARGO_FLAGS)
+	cargo build --workspace $(CARGO_FLAGS)
+	cargo run $(CARGO_FLAGS) -p raven-settings
 
 probe:
-	cargo run $(CARGO_FLAGS) -- --probe
+	cargo run $(CARGO_FLAGS) -p raven-settings -- --probe
 
 test:
-	cargo test --locked
+	cargo test --locked --workspace
 
 check:
 	cargo fmt --check
-	cargo clippy --locked --all-targets -- -D warnings
-	cargo test --locked
+	cargo clippy --locked --workspace --all-targets -- -D warnings
+	cargo test --locked --workspace
 
 clean:
 	cargo clean
@@ -49,6 +51,7 @@ endef
 
 install: build
 	install -Dm755 "$(TARGET_DIR)/$(BIN_NAME)" "$(DESTDIR)$(BINDIR)/$(BIN_NAME)"
+	install -Dm755 "$(TARGET_DIR)/raven-keycast" "$(DESTDIR)$(BINDIR)/raven-keycast"
 	install -Dm644 "data/$(APP_ID).desktop" "$(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop"
 	install -Dm644 "data/$(APP_ID).metainfo.xml" "$(DESTDIR)$(DATADIR)/metainfo/$(APP_ID).metainfo.xml"
 	install -Dm644 "data/icons/hicolor/scalable/apps/$(APP_ID).svg" "$(DESTDIR)$(ICONDIR)/$(APP_ID).svg"
@@ -57,6 +60,7 @@ install: build
 
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/$(BIN_NAME)"
+	rm -f "$(DESTDIR)$(BINDIR)/raven-keycast"
 	rm -f "$(DESTDIR)$(DATADIR)/applications/$(APP_ID).desktop"
 	rm -f "$(DESTDIR)$(DATADIR)/metainfo/$(APP_ID).metainfo.xml"
 	rm -f "$(DESTDIR)$(ICONDIR)/$(APP_ID).svg"

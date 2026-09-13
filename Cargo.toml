@@ -35,6 +35,11 @@ wayland-client = "0.31"
 wayland-backend = "0.3"
 wayland-scanner = "0.31"
 
+# raven-keycast, the keystroke overlay the Key Overlay page switches on, is a
+# binary of its own with no GTK in it; see keycast/.
+[workspace]
+members = ["keycast"]
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

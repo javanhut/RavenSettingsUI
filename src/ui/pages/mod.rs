@@ -12,6 +12,7 @@ pub mod bluetooth;
 pub mod datetime;
 pub mod display;
 pub mod general;
+pub mod keycast;
 pub mod network;
 pub mod personalization;
 pub mod privacy;
@@ -163,6 +164,28 @@ pub fn all() -> Vec<PageInfo> {
                 "hidpi",
             ],
             build: display::build,
+        },
+        PageInfo {
+            id: "keycast",
+            title: "Key Overlay",
+            icon: "input-keyboard-symbolic",
+            tint: "orange",
+            keywords: &[
+                "keystrokes",
+                "keys",
+                "keyboard",
+                "screencast",
+                "screen recording",
+                "record",
+                "demo",
+                "presentation",
+                "overlay",
+                "screenkey",
+                "shortcuts",
+                "mouse",
+                "clicks",
+            ],
+            build: keycast::build,
         },
         PageInfo {
             id: "storage",

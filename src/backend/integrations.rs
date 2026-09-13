@@ -763,9 +763,12 @@ font_size = 13.5
                 ("font_size", format!("{:.1}", bar_font_size(1.1))),
             ],
         );
-        assert_eq!(once, "height = 31
+        assert_eq!(
+            once,
+            "height = 31
 font_size = 14.9
-");
+"
+        );
         let twice = rewrite_toml_keys(
             &once,
             &[

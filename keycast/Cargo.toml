@@ -1,0 +1,23 @@
+[package]
+name = "raven-keycast"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "The keys and buttons being pressed, drawn on screen: for screen recordings and demonstrations on Raven Linux"
+repository = "https://github.com/javanhut/RavenSettingsUI"
+
+[[bin]]
+name = "raven-keycast"
+path = "src/main.rs"
+
+# No GTK: a layer surface drawn into shm, the same way RoostBar is, and the
+# same versions of the same crates so the two resolve one set.
+[dependencies]
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
+wayland-client = "0.31"
+calloop = "0.14"
+calloop-wayland-source = "0.4"
+ab_glyph = "0.2"
+evdev = "0.13"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

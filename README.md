@@ -35,6 +35,7 @@ setting on Raven, and says so when that component is not there.
 | Personalization | `$XDG_STATE_HOME/raven/pins` (dock), `~/.config/roostbar/config.toml` (bar), `~/.config/mimeapps.list` through GIO (default apps) | The compositor reads `pins` at start, so dock edits show at next login. |
 | Appearance | `~/.config/raven/desktop.toml`, read by Huginn; wallpaper via `ravencanvas set --persist`; pushed to RoostBar and GTK | See below. Without RavenCanvas, installing the wallpaper system-wide is offered as a command for your terminal. |
 | Privacy | `$XDG_STATE_HOME/raven/frecency` and app search histories | |
+| Key Overlay | `raven-keycast` (in this repo), reading `[keycast]` in desktop.toml; `~/.config/raven/services/raven-keycast.toml` for `raven-init --user` | Switching it on starts the overlay now and at every login. Reading keys needs the account in the `input` group; the page offers the `usermod` in your terminal. See below. |
 
 ## desktop.toml — the desktop-wide settings file
 
@@ -108,6 +109,63 @@ On every save the app also:
 Shadows, animation speed and interface scale are recorded for applications
 and the bar; the compositor has no switches for those yet.
 
+## Key Overlay — raven-keycast
+
+The keys and buttons being pressed, drawn on screen, for screen recordings,
+demonstrations and teaching. Its own binary in `keycast/`, with no GTK: a
+`wlr-layer-shell` surface drawn into shm the way RoostBar is.
+
+- **Where it draws.** The `overlay` layer, which Huginn keeps above every
+  window including a fullscreen one, with no keyboard interactivity and an
+  empty input region, so every click goes through it to what is beneath.
+- **Where the keys come from.** `/dev/input/event*`, through evdev, which
+  the `input` group Raven gives the desktop user may read. No Wayland
+  protocol hands one client the keys typed into another, and none should.
+  Devices are rescanned every two seconds, so a keyboard plugged in later
+  shows up.
+- **What it looks like.** Each stroke is a glass panel of keycaps:
+  `Ctrl + Shift + T` together, `A ×3` for a repeat. A group rises and fades
+  in; a cap's face presses down onto its lip and tints towards the accent
+  while the key is held, sends a ring outward as it goes down, and springs
+  back when released; the count pops; a group sinks and fades out once its
+  keys have been up for the hide-after time, and the row slides over to
+  close the gap. With `smooth_animations = false` groups only fade and caps
+  change colour without moving. Frames are drawn only while something
+  moves.
+- **Privacy.** Nothing typed is written anywhere. `mode = "shortcuts"`
+  shows only keys pressed with Ctrl, Alt or Super and keys that type no
+  text, so typing stays off screen. Huginn draws nothing but the lock screen
+  while locked; on top of that, keys are dropped while `raven-lock` is
+  running and the overlay is cleared either side of a lock, so a password
+  typed there cannot appear after it.
+- **Starting and stopping.** It re-reads desktop.toml when the file
+  changes; while `enabled` is false it holds no surface and no device open.
+  The page's switch saves the setting, writes
+  `~/.config/raven/services/raven-keycast.toml` (with `enabled` to match)
+  so the session supervisor starts it at login, and starts or stops the
+  process now: through `raven-rc --user` when that supervisor already knows
+  the service, directly otherwise (logging to
+  `~/.local/state/raven/log/raven-keycast.log`). One instance per session,
+  held by a lock in `$XDG_RUNTIME_DIR`.
+
+```toml
+[keycast]
+enabled = false
+position = "bottom-centre"   # bottom-centre | bottom-left | bottom-right | top-centre
+size = "medium"              # small | medium | large
+mode = "all"                 # all | shortcuts
+show_mouse = true
+hide_after_ms = 2000
+```
+
+Caps are labelled by physical key as on a US keyboard: the overlay reads
+devices, not the compositor's keymap. It shows on the screen the compositor
+puts new layer surfaces on.
+
+`RAVEN_KEYCAST_FRAMES=<dir> cargo test --release -p raven-keycast -- --ignored frames`
+plays a sequence of keys at 60 Hz and saves frames as raw RGB, for looking at
+the overlay without a compositor (`ffmpeg -f rawvideo -pix_fmt rgb24 -s 2000x196 -i F.rgb F.png`).
+
 ## Privilege: sockets first, then your terminal, never sudo from the GUI
 
 The rule is RavenLinux's (ARCHITECTURE.md, "Sleep" and the paragraphs after
@@ -164,6 +222,7 @@ src/ui/window.rs       sidebar, search, page stack
 src/ui/pages/          one module per page
 protocols/             raven-shell-v1.xml, vendored from RavenGUI
 data/                  desktop entry, icon, metainfo, udev rule
+keycast/               raven-keycast, the on-screen keystroke overlay (no GTK)
 ```
 
 Backends are plain blocking Rust; the UI runs them through

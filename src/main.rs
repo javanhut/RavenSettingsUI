@@ -59,6 +59,14 @@ fn probe() {
     println!("backlights: {:#?}", display::backlights());
     println!("== storage");
     println!("{:#?}", storage::filesystems().map(|v| v.len()));
+    println!("== key overlay");
+    println!(
+        "binary: {:?}, running: {}, input: {:?}, service: {}",
+        keycast::binary(),
+        keycast::running(),
+        keycast::input_access(),
+        keycast::service_path().display()
+    );
     println!("== updates (rvn: {})", updates::available());
     println!("{:?}", updates::check(false).map(|c| c.updates.len()));
 }

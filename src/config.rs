@@ -144,6 +144,36 @@ impl Default for Privacy {
     }
 }
 
+/// The on-screen keystroke overlay, read by `raven-keycast`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Keycast {
+    pub enabled: bool,
+    /// bottom-centre, bottom-left, bottom-right or top-centre.
+    pub position: String,
+    /// small, medium or large.
+    pub size: String,
+    /// `all`, or `shortcuts`: only keys pressed with Ctrl, Alt or Super, and
+    /// keys that type no text.
+    pub mode: String,
+    pub show_mouse: bool,
+    /// How long a stroke stays once its keys are released.
+    pub hide_after_ms: u32,
+}
+
+impl Default for Keycast {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            position: "bottom-centre".into(),
+            size: "medium".into(),
+            mode: "all".into(),
+            show_mouse: true,
+            hide_after_ms: 2000,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DesktopConfig {
@@ -151,6 +181,7 @@ pub struct DesktopConfig {
     pub general: General,
     pub personalization: Personalization,
     pub privacy: Privacy,
+    pub keycast: Keycast,
 }
 
 pub fn config_dir() -> PathBuf {

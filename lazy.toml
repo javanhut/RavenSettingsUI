@@ -5,25 +5,25 @@ default = "build"
 
 [commands.build]
 desc = "Build, optimised"
-run = ["cargo build --locked --release"]
+run = ["cargo build --locked --workspace --release"]
 alias = ["b"]
 
 [commands.run]
 desc = "Run the settings app"
-run = ["cargo run --release"]
+run = ["cargo build --workspace --release", "cargo run --release -p raven-settings"]
 
 [commands.probe]
 desc = "Print what every backend sees (network, Bluetooth, sound, display, updates)"
-run = ["cargo run --release -- --probe"]
+run = ["cargo run --release -p raven-settings -- --probe"]
 
 [commands.test]
 desc = "Run the unit tests"
-run = ["cargo test --locked"]
+run = ["cargo test --locked --workspace"]
 alias = ["t"]
 
 [commands.check]
 desc = "fmt, clippy and tests"
-run = ["cargo fmt --check", "cargo clippy --locked --all-targets -- -D warnings", "cargo test --locked"]
+run = ["cargo fmt --check", "cargo clippy --locked --workspace --all-targets -- -D warnings", "cargo test --locked --workspace"]
 
 # The Makefile's install target depends on build, so `sudo make install`
 # builds as root. Here the build runs as you and only these steps escalate.
@@ -34,6 +34,7 @@ escalate = true
 writes = ["/usr/local/bin", "/usr/local/share"]
 run = [
   "install -Dm755 target/release/raven-settings /usr/local/bin/raven-settings",
+  "install -Dm755 target/release/raven-keycast /usr/local/bin/raven-keycast",
   "install -Dm644 data/com.ravensettings.Raven.desktop /usr/local/share/applications/com.ravensettings.Raven.desktop",
   "install -Dm644 data/com.ravensettings.Raven.metainfo.xml /usr/local/share/metainfo/com.ravensettings.Raven.metainfo.xml",
   "install -Dm644 data/icons/hicolor/scalable/apps/com.ravensettings.Raven.svg /usr/local/share/icons/hicolor/scalable/apps/com.ravensettings.Raven.svg",
