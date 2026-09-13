@@ -21,6 +21,26 @@ fn roostbar_config() -> PathBuf {
         .join("config.toml")
 }
 
+/// RoostBar's own defaults for the two metrics interface scale drives. The
+/// bar is drawn at these at 100%, so they are the base the factor multiplies
+/// rather than whatever the file happens to say -- otherwise every save at
+/// 110% would compound on the last one.
+const BAR_HEIGHT: f64 = 28.0;
+const BAR_FONT_SIZE: f64 = 13.5;
+
+/// The bar's height at `scale`, in whole logical pixels. Clamped so a scale
+/// that arrives from a hand-edited desktop.toml cannot ask for a bar of one
+/// pixel or one that swallows the screen.
+fn bar_height(scale: f64) -> u32 {
+    (BAR_HEIGHT * scale).round().clamp(16.0, 96.0) as u32
+}
+
+/// The bar's font size at `scale`, to a tenth of a point -- the precision
+/// config.example.toml is written in, and enough for a 10% step to move it.
+fn bar_font_size(scale: f64) -> f64 {
+    ((BAR_FONT_SIZE * scale).clamp(7.0, 48.0) * 10.0).round() / 10.0
+}
+
 /// Rewrite the handful of RoostBar keys that Settings owns, preserving every
 /// other line (and comment) of the file.
 pub fn sync_roostbar(cfg: &DesktopConfig) -> Result<()> {
@@ -53,6 +73,15 @@ pub fn sync_roostbar(cfg: &DesktopConfig) -> Result<()> {
         ),
         ("clock_format", format!("\"{clock}\"")),
         ("show_date", cfg.general.show_date.to_string()),
+        ("height", bar_height(cfg.appearance.scale).to_string()),
+        (
+            "font_size",
+            // `{:.1}` and not `{}`: Rust prints a whole f64 as `13`, and
+            // while toml does coerce that integer into RoostBar's
+            // `font_size: f32`, the key is documented and read as a float.
+            // A tenth always written keeps the file saying what it means.
+            format!("{:.1}", bar_font_size(cfg.appearance.scale)),
+        ),
     ];
     let new = rewrite_toml_keys(&text, &updates);
     if let Some(dir) = path.parent() {
@@ -701,6 +730,50 @@ mod tests {
         assert_eq!(again, out);
         assert_eq!(comment_start("a = \"x\\\"#y\" # z"), Some(12));
         assert_eq!(comment_start("a = \"#x\""), None);
+    }
+
+    #[test]
+    fn scale_drives_the_bar_metrics() {
+        // 100% is RoostBar's own default, untouched.
+        assert_eq!(bar_height(1.0), 28);
+        assert_eq!(bar_font_size(1.0), 13.5);
+        // The ends of the Appearance slider, 80% and 120%.
+        assert_eq!(bar_height(0.8), 22);
+        assert_eq!(bar_font_size(0.8), 10.8);
+        assert_eq!(bar_height(1.2), 34);
+        assert_eq!(bar_font_size(1.2), 16.2);
+        // A nonsense scale from a hand-edited desktop.toml is clamped, not
+        // passed through to a bar of two pixels.
+        assert_eq!(bar_height(0.0), 16);
+        assert_eq!(bar_height(40.0), 96);
+        assert_eq!(bar_font_size(0.0), 7.0);
+        assert_eq!(bar_font_size(40.0), 48.0);
+    }
+
+    #[test]
+    fn syncing_twice_at_one_scale_does_not_compound() {
+        // The metrics come off RoostBar's defaults, never off the file, so
+        // the second save at 110% must write what the first one did.
+        let once = rewrite_toml_keys(
+            "height = 28
+font_size = 13.5
+",
+            &[
+                ("height", bar_height(1.1).to_string()),
+                ("font_size", format!("{:.1}", bar_font_size(1.1))),
+            ],
+        );
+        assert_eq!(once, "height = 31
+font_size = 14.9
+");
+        let twice = rewrite_toml_keys(
+            &once,
+            &[
+                ("height", bar_height(1.1).to_string()),
+                ("font_size", format!("{:.1}", bar_font_size(1.1))),
+            ],
+        );
+        assert_eq!(twice, once);
     }
 
     #[test]

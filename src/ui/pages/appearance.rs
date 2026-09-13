@@ -208,7 +208,7 @@ fn scale_card(app: &Rc<App>) -> gtk::Box {
     });
     body.append(&scale);
     body.append(&widgets::dim_label(
-        "Applies to newly started apps via desktop.toml; per-screen scale is under Display.",
+        "The bar resizes at once; other apps take it from desktop.toml when they next start. Per-screen scale is under Display.",
     ));
     card
 }

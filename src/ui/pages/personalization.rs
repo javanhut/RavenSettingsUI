@@ -221,7 +221,7 @@ fn pick_app(app: &Rc<App>, chosen: impl Fn(String) + 'static) {
 fn bar_card(app: &Rc<App>) -> gtk::Box {
     let (card, body) = widgets::card(
         "Bar",
-        "RoostBar. Saved to ~/.config/roostbar/config.toml, which the bar rereads within a few seconds.",
+        "RoostBar. Saved to ~/.config/roostbar/config.toml, which the bar rereads within a few seconds. Its height and text size follow Interface scale, under Appearance.",
     );
     let list = widgets::list();
     let pos = adw::ComboRow::builder()
