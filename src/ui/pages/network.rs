@@ -27,6 +27,7 @@ struct Page {
     toggling: std::cell::Cell<bool>,
     current_ssid: RefCell<Option<String>>,
     wifi_port: RefCell<Option<String>>,
+    refreshing: std::cell::Cell<bool>,
 }
 
 pub fn build(app: &Rc<App>) -> gtk::Widget {
@@ -139,6 +140,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         toggling: std::cell::Cell::new(false),
         current_ssid: RefCell::new(None),
         wifi_port: RefCell::new(None),
+        refreshing: std::cell::Cell::new(false),
     });
 
     {
@@ -206,7 +208,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         });
     }
 
-    // Refresh when shown; rescan every 30 s while visible.
+    // Scan when shown; refresh status every 30 s while visible.
     {
         let app = app.clone();
         let page = page.clone();
@@ -229,13 +231,17 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
 
 struct Refresh {
     status: Option<net::ConnectionStatus>,
-    networks: Vec<NetworkSummary>,
+    networks: Option<Vec<NetworkSummary>>,
     ports: Vec<PortSummary>,
     error: Option<String>,
 }
 
 fn refresh(app: &Rc<App>, page: &Rc<Page>, rescan: bool) {
+    if page.refreshing.replace(true) {
+        return;
+    }
     if !Client::available() {
+        page.refreshing.set(false);
         page.spinner.stop();
         page.scan.set_sensitive(true);
         page.daemon_banner.set_visible(true);
@@ -266,7 +272,7 @@ fn refresh(app: &Rc<App>, page: &Rc<Page>, rescan: bool) {
         move || {
             let mut out = Refresh {
                 status: None,
-                networks: vec![],
+                networks: None,
                 ports: vec![],
                 error: None,
             };
@@ -276,7 +282,7 @@ fn refresh(app: &Rc<App>, page: &Rc<Page>, rescan: bool) {
                     out.status = c.status().ok();
                     if rescan {
                         match c.scan(None) {
-                            Ok(n) => out.networks = n,
+                            Ok(n) => out.networks = Some(n),
                             Err(e) => out.error = Some(e.to_string()),
                         }
                     }
@@ -286,6 +292,7 @@ fn refresh(app: &Rc<App>, page: &Rc<Page>, rescan: bool) {
             out
         },
         move |r| {
+            page.refreshing.set(false);
             page.spinner.stop();
             page.scan.set_sensitive(true);
             if let Some(e) = r.error {
@@ -293,8 +300,8 @@ fn refresh(app: &Rc<App>, page: &Rc<Page>, rescan: bool) {
             }
             show_status(&page, r.status.as_ref(), &r.ports);
             show_ports(&app, &page, &r.ports);
-            if rescan {
-                show_networks(&app, &page, &r.networks);
+            if let Some(networks) = r.networks {
+                show_networks(&app, &page, &networks);
             }
         },
     );
