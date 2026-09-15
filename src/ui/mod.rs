@@ -131,6 +131,10 @@ pub fn run() -> glib::ExitCode {
         window: RefCell::new(None),
         listeners: RefCell::new(Vec::new()),
     });
+    // `--page <id>` opens on that section, so RoostBar can take a click on
+    // its Wi-Fi icon straight to Network. GApplication rejects options it
+    // does not know, so the flag is taken out before `run`.
+    let (page, args) = take_page_arg(std::env::args().collect());
 
     gtk_app.connect_activate(move |gtk_app| {
         if let Some(w) = app.window.borrow().as_ref() {
@@ -146,7 +150,7 @@ pub fn run() -> glib::ExitCode {
                 cfg.appearance.transparency,
             );
         }
-        let window = window::build(gtk_app, &app);
+        let window = window::build(gtk_app, &app, page.as_deref());
         *app.window.borrow_mut() = Some(window.clone());
         WINDOW.with(|w| *w.borrow_mut() = Some(window.clone()));
         {
@@ -170,7 +174,25 @@ pub fn run() -> glib::ExitCode {
         }
     });
 
-    gtk_app.run()
+    gtk_app.run_with_args(&args)
+}
+
+/// Split `--page <id>` / `--page=<id>` out of argv, leaving the rest for
+/// GApplication.
+fn take_page_arg(argv: Vec<String>) -> (Option<String>, Vec<String>) {
+    let mut page = None;
+    let mut rest = Vec::with_capacity(argv.len());
+    let mut it = argv.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--page" {
+            page = it.next();
+        } else if let Some(id) = a.strip_prefix("--page=") {
+            page = Some(id.to_string());
+        } else {
+            rest.push(a);
+        }
+    }
+    (page, rest)
 }
 
 /// Explain a privileged step and offer to run it in the user's terminal.

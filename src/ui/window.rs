@@ -12,7 +12,11 @@ use super::widgets;
 use super::App;
 use crate::backend::system;
 
-pub fn build(gtk_app: &adw::Application, app: &Rc<App>) -> adw::ApplicationWindow {
+pub fn build(
+    gtk_app: &adw::Application,
+    app: &Rc<App>,
+    initial_page: Option<&str>,
+) -> adw::ApplicationWindow {
     let window = adw::ApplicationWindow::builder()
         .application(gtk_app)
         .title("Settings")
@@ -106,7 +110,12 @@ pub fn build(gtk_app: &adw::Application, app: &Rc<App>) -> adw::ApplicationWindo
             }
         });
     }
-    nav.select_row(nav.row_at_index(0).as_ref());
+    // `--page` names the section to open on; an id that is not a page falls
+    // back to the first, the same as no flag.
+    let first = initial_page
+        .and_then(|id| infos.iter().position(|i| i.id == id))
+        .unwrap_or(0);
+    nav.select_row(nav.row_at_index(first as i32).as_ref());
 
     let header = adw::HeaderBar::builder()
         .title_widget(&page_title)

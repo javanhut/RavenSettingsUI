@@ -174,6 +174,25 @@ impl Default for Keycast {
     }
 }
 
+/// Notification cards, drawn by the compositor, which reads this section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Notifications {
+    /// Only critical notifications appear; the rest wait in quick settings.
+    pub do_not_disturb: bool,
+    /// Seconds a card stays when its application leaves that to the desktop.
+    pub timeout_seconds: u32,
+}
+
+impl Default for Notifications {
+    fn default() -> Self {
+        Self {
+            do_not_disturb: false,
+            timeout_seconds: 6,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DesktopConfig {
@@ -182,6 +201,7 @@ pub struct DesktopConfig {
     pub personalization: Personalization,
     pub privacy: Privacy,
     pub keycast: Keycast,
+    pub notifications: Notifications,
 }
 
 pub fn config_dir() -> PathBuf {
@@ -268,6 +288,25 @@ mod tests {
         let back: DesktopConfig = toml::from_str(&text).unwrap();
         assert_eq!(back.appearance.accent, "#123456");
         assert_eq!(back.appearance.theme_mode, ThemeMode::Light);
+    }
+
+    #[test]
+    fn the_notifications_section_is_written_and_read_back() {
+        let mut cfg = DesktopConfig::default();
+        cfg.notifications.do_not_disturb = true;
+        cfg.notifications.timeout_seconds = 10;
+        let text = toml::to_string(&cfg).unwrap();
+        assert!(
+            text.contains("[notifications]"),
+            "saved with the rest: {text}"
+        );
+        let back: DesktopConfig = toml::from_str(&text).unwrap();
+        assert!(back.notifications.do_not_disturb);
+        assert_eq!(back.notifications.timeout_seconds, 10);
+
+        let absent: DesktopConfig = toml::from_str("[appearance]\n").unwrap();
+        assert!(!absent.notifications.do_not_disturb);
+        assert_eq!(absent.notifications.timeout_seconds, 6);
     }
 
     #[test]

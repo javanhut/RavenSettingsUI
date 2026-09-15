@@ -210,6 +210,10 @@ running it by hand is always an option.
 `raven-settings --probe` prints what each backend can see and is the first
 thing to run when a page says something is unavailable.
 
+`raven-settings --page <id>` opens on one section (`network`, `bluetooth`,
+`datetime`, … — the ids in `src/ui/pages/mod.rs`). RoostBar uses it to take
+a click on its Wi-Fi, Bluetooth or clock straight to the matching page.
+
 ## Layout
 
 ```

@@ -14,6 +14,7 @@ pub mod display;
 pub mod general;
 pub mod keycast;
 pub mod network;
+pub mod notifications;
 pub mod personalization;
 pub mod privacy;
 pub mod sound;
@@ -147,6 +148,23 @@ pub fn all() -> Vec<PageInfo> {
                 "pipewire",
             ],
             build: sound::build,
+        },
+        PageInfo {
+            id: "notifications",
+            title: "Notifications",
+            icon: "preferences-system-notifications-symbolic",
+            tint: "orange",
+            keywords: &[
+                "do not disturb",
+                "dnd",
+                "quiet",
+                "alerts",
+                "messages",
+                "banner",
+                "popup",
+                "timeout",
+            ],
+            build: notifications::build,
         },
         PageInfo {
             id: "display",
