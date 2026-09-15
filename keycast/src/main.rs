@@ -588,7 +588,10 @@ fn single_instance() -> Result<Option<std::fs::File>, ()> {
 fn connect() -> Option<Connection> {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if let Ok(conn) = Connection::connect_to_env() {
+        if let Some(conn) = Connection::connect_to_env()
+            .ok()
+            .or_else(connect_runtime_socket)
+        {
             return Some(conn);
         }
         if Instant::now() >= deadline {
@@ -596,6 +599,31 @@ fn connect() -> Option<Connection> {
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+/// `raven-init --user` starts before the compositor, so what it starts has
+/// no `WAYLAND_DISPLAY` to follow, and libwayland's `wayland-0` guess is not
+/// always the socket Huginn made. Without one, take the socket that is there.
+fn connect_runtime_socket() -> Option<Connection> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return None;
+    }
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")?;
+    let mut sockets: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("wayland-") && !n.ends_with(".lock"))
+        })
+        .collect();
+    sockets.sort();
+    sockets.into_iter().find_map(|path| {
+        let stream = std::os::unix::net::UnixStream::connect(path).ok()?;
+        Connection::from_socket(stream).ok()
+    })
 }
 
 impl CompositorHandler for Keycast {

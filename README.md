@@ -146,7 +146,9 @@ demonstrations and teaching. Its own binary in `keycast/`, with no GTK: a
   process now: through `raven-rc --user` when that supervisor already knows
   the service, directly otherwise (logging to
   `~/.local/state/raven/log/raven-keycast.log`). One instance per session,
-  held by a lock in `$XDG_RUNTIME_DIR`.
+  held by a lock in `$XDG_RUNTIME_DIR`. The supervisor starts before the
+  compositor and so passes no `WAYLAND_DISPLAY`; without one the overlay
+  connects to the `wayland-*` socket in `$XDG_RUNTIME_DIR`.
 
 ```toml
 [keycast]
