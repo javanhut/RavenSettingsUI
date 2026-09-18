@@ -352,6 +352,54 @@ fn apply(app: &Rc<App>, page: &Rc<Page>, status: Status) {
         page.fingers.append(&row);
     }
 
+    // Some readers cannot remove one finger at a time -- the sensor stores
+    // fingers and not accounts, and the only delete they honour takes the
+    // whole store. On those, removing one above fails with the reader's own
+    // reason and this is the way through; on the others it is the quick way to
+    // start again. Shown only with more than one stored, because removing the
+    // single one already clears the sensor.
+    if status.enrolled.len() > 1 {
+        let row = adw::ActionRow::builder()
+            .title("Remove all fingerprints")
+            .subtitle("Some readers can only forget every fingerprint at once.")
+            .build();
+        let remove_all = gtk::Button::with_label("Remove All");
+        remove_all.add_css_class("flat");
+        remove_all.add_css_class("destructive-action");
+        remove_all.set_valign(gtk::Align::Center);
+        let (app2, page2) = (app.clone(), page.clone());
+        remove_all.connect_clicked(move |b| {
+            let (app, page) = (app2.clone(), page2.clone());
+            confirm(
+                b,
+                "Remove all fingerprints?",
+                "This clears every fingerprint on the reader, including any belonging to \
+                 other people who use this computer. Logging in, unlocking and sudo will go \
+                 back to asking for your password.",
+                "Remove All",
+                true,
+                move |yes| {
+                    if !yes {
+                        return;
+                    }
+                    let (app, page) = (app.clone(), page.clone());
+                    spawn(
+                        move || fp::forget(None),
+                        move |result| match result {
+                            Ok(status) => {
+                                app.toast("All fingerprints removed");
+                                apply(&app, &page, status);
+                            }
+                            Err(e) => app.error("Could not remove the fingerprints", &e),
+                        },
+                    );
+                },
+            );
+        });
+        row.add_suffix(&remove_all);
+        page.fingers.append(&row);
+    }
+
     page.add.set_sensitive(present);
     page.add.set_label(if status.enrolled.is_empty() {
         "Add a Fingerprint…"
@@ -499,7 +547,10 @@ fn add_finger(app: &Rc<App>, page: &Rc<Page>) {
         .iter()
         .map(|f| {
             if enrolled.contains(f) {
-                format!("{} (replace)", f.label())
+                // Not "(replace)": a reader that cannot remove one finger
+                // cannot replace one either, and the enrolment is refused
+                // rather than quietly leaving two templates under one name.
+                format!("{} (already added)", f.label())
             } else {
                 f.label().to_string()
             }
@@ -535,6 +586,13 @@ fn add_finger(app: &Rc<App>, page: &Rc<Page>) {
             let Some(&finger) = Finger::ALL.get(choice.selected() as usize) else {
                 return;
             };
+            if enrolled.contains(&finger) {
+                app.toast(&format!(
+                    "Your {} is already added. Remove it first.",
+                    finger.label().to_lowercase()
+                ));
+                return;
+            }
             let secret = password.text().to_string();
             // Cleared now it has been read, so it does not sit in a widget
             // that outlives the dialog.
