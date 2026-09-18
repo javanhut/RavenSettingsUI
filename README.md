@@ -18,6 +18,11 @@ sudo make install
 
 or with imlazy: `imlazy build`, `imlazy run`, `imlazy probe`, `imlazy install`.
 
+Every build first runs `make deps` (`imlazy deps`), which installs GTK 4 and
+libadwaita with `rvn install --repo-only -y gtk4 libadwaita` when pkg-config
+cannot find GTK ≥ 4.12 and libadwaita ≥ 1.5. When they are already there it
+does nothing.
+
 ## What talks to what
 
 Nothing here is faked. Each page drives the component that actually owns the

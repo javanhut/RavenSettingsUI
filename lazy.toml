@@ -3,26 +3,37 @@
 [settings]
 default = "build"
 
+# GTK 4 and libadwaita, installed through rvn when pkg-config cannot find
+# them. Same versions and package names as RVN_DEPS / PC_DEPS in the Makefile.
+[commands.deps]
+desc = "Install the system libraries the build links against, if missing"
+run = ["sh -c 'pkg-config --exists \"gtk4 >= 4.12, libadwaita-1 >= 1.5\" || rvn install --repo-only -y gtk4 libadwaita'"]
+
 [commands.build]
 desc = "Build, optimised"
+dep = ["deps"]
 run = ["cargo build --locked --workspace --release"]
 alias = ["b"]
 
 [commands.run]
 desc = "Run the settings app"
+dep = ["deps"]
 run = ["cargo build --workspace --release", "cargo run --release -p raven-settings"]
 
 [commands.probe]
 desc = "Print what every backend sees (network, Bluetooth, sound, display, updates)"
+dep = ["deps"]
 run = ["cargo run --release -p raven-settings -- --probe"]
 
 [commands.test]
 desc = "Run the unit tests"
+dep = ["deps"]
 run = ["cargo test --locked --workspace"]
 alias = ["t"]
 
 [commands.check]
 desc = "fmt, clippy and tests"
+dep = ["deps"]
 run = ["cargo fmt --check", "cargo clippy --locked --workspace --all-targets -- -D warnings", "cargo test --locked --workspace"]
 
 # The Makefile's install target depends on build, so `sudo make install`

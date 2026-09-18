@@ -12,25 +12,37 @@ PROFILE   ?= release
 CARGO_FLAGS := $(if $(filter release,$(PROFILE)),--release,)
 TARGET_DIR  := target/$(PROFILE)
 
-.PHONY: all build run probe test check clean install uninstall
+.PHONY: all deps build run probe test check clean install uninstall
+
+# System libraries the gtk-rs crates link against: rvn package names, and the
+# pkg-config modules (with the version floors Cargo.toml's features need) that
+# show they are there. Installed through rvn only when missing.
+RVN_DEPS := gtk4 libadwaita
+PC_DEPS  := gtk4 >= 4.12, libadwaita-1 >= 1.5
 
 all: build
 
-build:
+deps:
+	@pkg-config --exists '$(PC_DEPS)' || { \
+		echo "Installing build dependencies with rvn: $(RVN_DEPS)"; \
+		rvn install --repo-only -y $(RVN_DEPS); \
+	}
+
+build: deps
 	cargo build --locked --workspace $(CARGO_FLAGS)
 
 # The overlay is built too, so the Key Overlay page finds it beside raven-settings.
-run:
+run: deps
 	cargo build --workspace $(CARGO_FLAGS)
 	cargo run $(CARGO_FLAGS) -p raven-settings
 
-probe:
+probe: deps
 	cargo run $(CARGO_FLAGS) -p raven-settings -- --probe
 
-test:
+test: deps
 	cargo test --locked --workspace
 
-check:
+check: deps
 	cargo fmt --check
 	cargo clippy --locked --workspace --all-targets -- -D warnings
 	cargo test --locked --workspace
