@@ -35,6 +35,7 @@ setting on Raven, and says so when that component is not there.
 | Personalization | `$XDG_STATE_HOME/raven/pins` (dock), `~/.config/roostbar/config.toml` (bar), `~/.config/mimeapps.list` through GIO (default apps) | The compositor reads `pins` at start, so dock edits show at next login. |
 | Appearance | `~/.config/raven/desktop.toml`, read by Huginn; wallpaper via `ravencanvas set --persist`; pushed to RoostBar and GTK | See below. Without RavenCanvas, installing the wallpaper system-wide is offered as a command for your terminal. |
 | Privacy | `$XDG_STATE_HOME/raven/frecency` and app search histories | |
+| Security | `ravend` on `/run/raven-lock/verify.sock` (length-prefixed JSON, the `raven-greet-proto` wire form), which asks `raven-fprintd` | Fingerprint reader status, enrolling and removing your fingers, and whether a finger logs in, unlocks, or approves `sudo`. Enrolling and switching a use on ask for your password; ravend checks it. Fingerprint `sudo` needs one line in `/etc/pam.d/sudo`; the page offers `sudo raven-finger-auth --install-pam` in your terminal. |
 | Key Overlay | `raven-keycast` (in this repo), reading `[keycast]` in desktop.toml; `~/.config/raven/services/raven-keycast.toml` for `raven-init --user` | Switching it on starts the overlay now and at every login. Reading keys needs the account in the `input` group; the page offers the `usermod` in your terminal. See below. |
 
 ## desktop.toml — the desktop-wide settings file

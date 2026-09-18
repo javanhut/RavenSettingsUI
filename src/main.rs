@@ -57,6 +57,13 @@ fn probe() {
     println!("== display");
     println!("outputs: {:?}", display::outputs());
     println!("backlights: {:#?}", display::backlights());
+    println!("== fingerprint (ravend at {})", fingerprint::SOCKET_PATH);
+    println!("{:#?}", fingerprint::status());
+    println!(
+        "sudo helper installed: {}, wired into /etc/pam.d/sudo: {}",
+        fingerprint::helper_installed(),
+        fingerprint::sudo_wired()
+    );
     println!("== storage");
     println!("{:#?}", storage::filesystems().map(|v| v.len()));
     println!("== key overlay");

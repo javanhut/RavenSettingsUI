@@ -17,6 +17,7 @@ pub mod network;
 pub mod notifications;
 pub mod personalization;
 pub mod privacy;
+pub mod security;
 pub mod sound;
 pub mod storage;
 pub mod updates;
@@ -220,6 +221,29 @@ pub fn all() -> Vec<PageInfo> {
             tint: "indigo",
             keywords: &["history", "frecency", "recent", "discoverable", "clear"],
             build: privacy::build,
+        },
+        PageInfo {
+            id: "security",
+            title: "Security",
+            icon: "security-high-symbolic",
+            tint: "green",
+            keywords: &[
+                "fingerprint",
+                "biometrics",
+                "biometric",
+                "finger",
+                "reader",
+                "sensor",
+                "enrol",
+                "enroll",
+                "login",
+                "unlock",
+                "lock screen",
+                "sudo",
+                "password",
+                "authentication",
+            ],
+            build: security::build,
         },
         PageInfo {
             id: "updates",
