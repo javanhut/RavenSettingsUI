@@ -36,6 +36,14 @@ struct Page {
     /// Set while the switches are moved to match `status`, so their handlers
     /// can tell that from a click.
     syncing: Cell<bool>,
+    /// A status request is out; see [`refresh`].
+    refreshing: Cell<bool>,
+    /// Another refresh was asked for while one was out.
+    refresh_again: Cell<bool>,
+    /// Seconds before the next automatic retry after a failed status, or 0
+    /// after one that worked; see [`retry_later`].
+    retry_delay: Cell<u64>,
+    retry_pending: Cell<bool>,
 }
 
 fn fingerprint_icon() -> gtk::Image {
@@ -143,6 +151,10 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         sudo_setup_button,
         status: RefCell::new(None),
         syncing: Cell::new(false),
+        refreshing: Cell::new(false),
+        refresh_again: Cell::new(false),
+        retry_delay: Cell::new(0),
+        retry_pending: Cell::new(false),
     });
 
     {
@@ -193,19 +205,62 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     root.upcast()
 }
 
+/// Ask ravend how the reader is, and draw the answer.
+///
+/// One question at a time. raven-fprintd serves one connection at a time, so
+/// a burst of them -- the page shown again and again, the button pressed while
+/// waiting -- only queues behind itself, and turns a slow reader into one that
+/// is reported busy. A refresh asked for meanwhile runs once this one is back.
 fn refresh(app: &Rc<App>, page: &Rc<Page>) {
+    if page.refreshing.replace(true) {
+        page.refresh_again.set(true);
+        return;
+    }
     let (app, page) = (app.clone(), page.clone());
-    spawn(fp::status, move |result| match result {
-        Ok(status) => apply(&app, &page, status),
-        Err(e) => {
-            tracing::warn!("fingerprint status: {e:#}");
-            page.reader_row.set_subtitle(&e.to_string());
-            page.reader_action.set_visible(false);
-            page.fingers.set_visible(false);
-            page.add.set_sensitive(false);
-            for row in [&page.login, &page.unlock, &page.sudo] {
-                row.set_sensitive(false);
+    spawn(fp::status, move |result| {
+        page.refreshing.set(false);
+        match result {
+            Ok(status) => {
+                page.retry_delay.set(0);
+                apply(&app, &page, status);
             }
+            Err(e) => {
+                tracing::warn!("fingerprint status: {e:#}");
+                page.reader_row.set_subtitle(&e.to_string());
+                page.reader_action.set_visible(false);
+                page.fingers.set_visible(false);
+                page.add.set_sensitive(false);
+                for row in [&page.login, &page.unlock, &page.sudo] {
+                    row.set_sensitive(false);
+                }
+                retry_later(&app, &page);
+            }
+        }
+        if page.refresh_again.replace(false) {
+            refresh(&app, &page);
+        }
+    });
+}
+
+/// Try again after a failed status, waiting longer each time -- 5, 10, 20 and
+/// 40 seconds -- and then leave it to the button. Only while the page is on
+/// screen; showing it again asks anyway.
+fn retry_later(app: &Rc<App>, page: &Rc<Page>) {
+    if page.retry_pending.get() {
+        return;
+    }
+    let delay = match page.retry_delay.get() {
+        0 => 5,
+        d if d < 40 => d * 2,
+        _ => return,
+    };
+    page.retry_delay.set(delay);
+    page.retry_pending.set(true);
+    let (app, page) = (app.clone(), page.clone());
+    glib::timeout_add_local_once(Duration::from_secs(delay), move || {
+        page.retry_pending.set(false);
+        if page.reader_row.is_mapped() {
+            refresh(&app, &page);
         }
     });
 }
