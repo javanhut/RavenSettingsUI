@@ -164,7 +164,7 @@ impl Session {
         let conn = Connection::connect_to_env().context("no Wayland display")?;
         let (globals, queue) = registry_queue_init::<State>(&conn)?;
         let qh = queue.handle();
-        let manager: RavenShellManagerV1 = globals.bind(&qh, 1..=5, ()).map_err(|e| {
+        let manager: RavenShellManagerV1 = globals.bind(&qh, 1..=6, ()).map_err(|e| {
             anyhow!("the compositor does not offer raven_shell_manager_v1 ({e}); is this Huginn?")
         })?;
         if manager.version() < 3 {
@@ -208,6 +208,17 @@ impl Drop for Session {
 pub fn outputs() -> Result<Vec<Output>> {
     let mut s = Session::open()?;
     s.wait_done()
+}
+
+/// Have every screen show its number for a few seconds.
+pub fn identify() -> Result<()> {
+    let s = Session::open()?;
+    if s.layout.version() < 6 {
+        bail!("the running compositor cannot identify screens. Update RavenGUI (imlazy install) and log in again");
+    }
+    s.layout.identify();
+    s.conn.flush()?;
+    Ok(())
 }
 
 /// Stage every change, apply them together, and return the arrangement the

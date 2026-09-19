@@ -36,14 +36,52 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     banner.set_revealed(false);
     content.append(&banner);
 
+    let outputs: Rc<RefCell<Vec<Output>>> = Rc::new(RefCell::new(vec![]));
+    let changes: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(vec![]));
+
+    // The arrangement as it will be once applied: every staged position,
+    // scale and rotation drawn before anything is sent, numbered the way
+    // Huginn numbers the screens themselves.
+    let identify = gtk::Button::with_label("Identify displays");
+    identify.set_tooltip_text(Some("Show each screen's number on it for a few seconds"));
+    let arrangement = widgets::card_with_control(
+        "Arrangement",
+        "Numbered left to right, as the overview and Identify show them",
+        &identify,
+    );
+    let preview = gtk::DrawingArea::new();
+    preview.set_content_height(220);
+    preview.set_hexpand(true);
+    {
+        let outputs = outputs.clone();
+        let changes = changes.clone();
+        preview.set_draw_func(move |area, cr, width, height| {
+            let screens = preview_screens(&outputs.borrow(), &changes.borrow());
+            draw_preview(cr, width as f64, height as f64, &area.color(), &screens);
+        });
+    }
+    arrangement.append(&preview);
+    content.append(&arrangement);
+    {
+        let app = app.clone();
+        identify.connect_clicked(move |b| {
+            b.set_sensitive(false);
+            let app = app.clone();
+            let b = b.clone();
+            spawn(display::identify, move |r| {
+                if let Err(e) = r {
+                    app.error("Could not identify displays", &e);
+                }
+                b.set_sensitive(true);
+            });
+        });
+    }
+
     let screens = gtk::Box::new(gtk::Orientation::Vertical, 14);
     content.append(&screens);
 
     let (bl_card, bl_body) = widgets::card("Brightness", "Built-in display backlight");
     content.append(&bl_card);
-
-    let outputs: Rc<RefCell<Vec<Output>>> = Rc::new(RefCell::new(vec![]));
-    let changes: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(vec![]));
 
     let apply = gtk::Button::with_label("Apply");
     apply.add_css_class("suggested-action");
@@ -57,6 +95,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         let outputs = outputs.clone();
         let changes = changes.clone();
         let apply = apply.clone();
+        let preview = preview.clone();
         Rc::new(move || {
             let app = app.clone();
             let screens = screens.clone();
@@ -64,6 +103,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
             let outputs = outputs.clone();
             let changes = changes.clone();
             let apply = apply.clone();
+            let preview = preview.clone();
             spawn(display::outputs, move |r| match r {
                 Ok(list) => {
                     banner.set_revealed(false);
@@ -71,9 +111,11 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
                     changes.borrow_mut().clear();
                     apply.set_sensitive(false);
                     widgets::clear_box(&screens);
-                    for o in &list {
-                        screens.append(&screen_card(o, &changes, &apply));
+                    let numbers = screen_numbers(&list);
+                    for (o, number) in list.iter().zip(numbers) {
+                        screens.append(&screen_card(o, number, &changes, &apply, &preview));
                     }
+                    preview.queue_draw();
                     screens.append(&apply);
                     let _ = &app;
                 }
@@ -117,8 +159,27 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     root.upcast()
 }
 
-fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Button) -> gtk::Box {
-    let mut title = o.name.clone();
+/// Each screen's number, as Huginn badges it in the overview: left to
+/// right, then top to bottom, from 1. Keep in step with
+/// `huginn-comp/src/overview.rs`'s `screen_numbers`.
+fn screen_numbers(outputs: &[Output]) -> Vec<u32> {
+    let mut order: Vec<usize> = (0..outputs.len()).collect();
+    order.sort_by_key(|&i| (outputs[i].x, outputs[i].y));
+    let mut numbers = vec![0; outputs.len()];
+    for (rank, i) in order.into_iter().enumerate() {
+        numbers[i] = rank as u32 + 1;
+    }
+    numbers
+}
+
+fn screen_card(
+    o: &Output,
+    number: u32,
+    changes: &Rc<RefCell<Vec<Change>>>,
+    apply: &gtk::Button,
+    preview: &gtk::DrawingArea,
+) -> gtk::Box {
+    let mut title = format!("Display {number}  ({})", o.name);
     if o.focused {
         title.push_str("  (focused)");
     }
@@ -174,6 +235,7 @@ fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Butt
         let apply = apply.clone();
         let scale_dd = scale_dd.clone();
         let rotate_dd = rotate_dd.clone();
+        let preview = preview.clone();
         let x = x.clone();
         let y = y.clone();
         let orig = o.clone();
@@ -202,6 +264,8 @@ fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Butt
                 list.push(change);
             }
             apply.set_sensitive(!list.is_empty());
+            drop(list);
+            preview.queue_draw();
         })
     };
     {
@@ -218,6 +282,160 @@ fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Butt
     }
     y.connect_value_changed(move |_| stage());
     card
+}
+
+/// One screen as the preview draws it: where it will be and what shape,
+/// once the staged changes are applied.
+#[derive(Debug, Clone, PartialEq)]
+struct PreviewScreen {
+    number: u32,
+    name: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    /// Quarter turns counter-clockwise, 0–3.
+    rotation: u32,
+    focused: bool,
+}
+
+/// The screens with every staged change folded in. A quarter turn that
+/// differs from the current one trades width and height; a new scale sizes
+/// the screen by how much denser or sparser it gets. "Automatic" is left at
+/// the size it has now, since only the compositor knows what that works out
+/// to -- Apply shows the truth.
+fn preview_screens(outputs: &[Output], changes: &[Change]) -> Vec<PreviewScreen> {
+    let numbers = screen_numbers(outputs);
+    outputs
+        .iter()
+        .zip(numbers)
+        .map(|(o, number)| {
+            let change = changes.iter().find(|c| c.name == o.name);
+            let now = o.rotation.unwrap_or(0);
+            let rotation = change.and_then(|c| c.rotation).unwrap_or(now);
+            let (mut w, mut h) = (o.width as f64, o.height as f64);
+            if rotation % 2 != now % 2 {
+                std::mem::swap(&mut w, &mut h);
+            }
+            if let Some(scale) = change.and_then(|c| c.scale).filter(|s| *s > 0.0) {
+                let factor = o.scale / scale;
+                w *= factor;
+                h *= factor;
+            }
+            let (x, y) = change.and_then(|c| c.position).unwrap_or((o.x, o.y));
+            PreviewScreen {
+                number,
+                name: o.name.clone(),
+                x: x as f64,
+                y: y as f64,
+                w,
+                h,
+                rotation,
+                focused: o.focused,
+            }
+        })
+        .collect()
+}
+
+/// What the screen's shape is and how far it is turned, in words.
+fn orientation_text(screen: &PreviewScreen) -> String {
+    let shape = if screen.w >= screen.h { "Landscape" } else { "Portrait" };
+    match screen.rotation {
+        0 => shape.to_owned(),
+        r => format!("{shape} · {}°", r * 90),
+    }
+}
+
+/// Huginn's accent and panel colours: the badge here is the badge on the
+/// screen, so the two can be matched by eye.
+const ACCENT: (f64, f64, f64) = (0x7A as f64 / 255.0, 0xA2 as f64 / 255.0, 0xF7 as f64 / 255.0);
+const BADGE_TEXT: (f64, f64, f64) = (0x16 as f64 / 255.0, 0x16 as f64 / 255.0, 0x1F as f64 / 255.0);
+
+fn rounded(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let r = r.min(w / 2.0).min(h / 2.0);
+    cr.new_sub_path();
+    cr.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
+    cr.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
+    cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
+    cr.arc(x + r, y + r, r, PI, 3.0 * FRAC_PI_2);
+    cr.close_path();
+}
+
+/// Text centred on `cx`, with its middle at `cy`.
+fn centred_text(cr: &gtk::cairo::Context, text: &str, cx: f64, cy: f64) {
+    if let Ok(ext) = cr.text_extents(text) {
+        cr.move_to(
+            cx - ext.width() / 2.0 - ext.x_bearing(),
+            cy - ext.height() / 2.0 - ext.y_bearing(),
+        );
+        let _ = cr.show_text(text);
+    }
+}
+
+fn draw_preview(
+    cr: &gtk::cairo::Context,
+    width: f64,
+    height: f64,
+    fg: &gtk::gdk::RGBA,
+    screens: &[PreviewScreen],
+) {
+    use gtk::cairo::{FontSlant, FontWeight};
+    let (r, g, b) = (fg.red() as f64, fg.green() as f64, fg.blue() as f64);
+    if screens.is_empty() {
+        return;
+    }
+    // Fit the whole desktop, with room round the edge, and centre it.
+    let left = screens.iter().map(|s| s.x).fold(f64::INFINITY, f64::min);
+    let top = screens.iter().map(|s| s.y).fold(f64::INFINITY, f64::min);
+    let right = screens.iter().map(|s| s.x + s.w).fold(f64::NEG_INFINITY, f64::max);
+    let bottom = screens.iter().map(|s| s.y + s.h).fold(f64::NEG_INFINITY, f64::max);
+    let pad = 16.0;
+    let fit = ((width - pad * 2.0) / (right - left).max(1.0))
+        .min((height - pad * 2.0) / (bottom - top).max(1.0));
+    let ox = (width - (right - left) * fit) / 2.0 - left * fit;
+    let oy = (height - (bottom - top) * fit) / 2.0 - top * fit;
+    // A hairline apart, so screens that touch still read as two.
+    let gap = 3.0;
+
+    for s in screens {
+        let (x, y) = (ox + s.x * fit + gap, oy + s.y * fit + gap);
+        let (w, h) = ((s.w * fit - gap * 2.0).max(4.0), (s.h * fit - gap * 2.0).max(4.0));
+
+        rounded(cr, x, y, w, h, 8.0);
+        cr.set_source_rgba(r, g, b, 0.08);
+        let _ = cr.fill_preserve();
+        if s.focused {
+            cr.set_source_rgb(ACCENT.0, ACCENT.1, ACCENT.2);
+            cr.set_line_width(2.0);
+        } else {
+            cr.set_source_rgba(r, g, b, 0.3);
+            cr.set_line_width(1.0);
+        }
+        let _ = cr.stroke();
+
+        // The number, in the square the screen shows in its corner.
+        let side = (w.min(h) * 0.38).clamp(18.0, 56.0);
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0 - side * 0.3);
+        rounded(cr, cx - side / 2.0, cy - side / 2.0, side, side, side * 0.22);
+        cr.set_source_rgb(ACCENT.0, ACCENT.1, ACCENT.2);
+        let _ = cr.fill();
+        cr.select_font_face("Sans", FontSlant::Normal, FontWeight::Bold);
+        cr.set_font_size(side * 0.6);
+        cr.set_source_rgb(BADGE_TEXT.0, BADGE_TEXT.1, BADGE_TEXT.2);
+        centred_text(cr, &s.number.to_string(), cx, cy);
+
+        // The connector and the orientation under it, when there is room.
+        let below = cy + side / 2.0;
+        if h > side * 2.2 && w > 60.0 {
+            cr.select_font_face("Sans", FontSlant::Normal, FontWeight::Normal);
+            cr.set_font_size(11.0);
+            cr.set_source_rgba(r, g, b, 0.85);
+            centred_text(cr, &s.name, cx, below + 14.0);
+            cr.set_source_rgba(r, g, b, 0.6);
+            centred_text(cr, &orientation_text(s), cx, below + 29.0);
+        }
+    }
 }
 
 fn label(text: &str) -> gtk::Label {
@@ -292,4 +510,80 @@ fn brightness_row(app: &Rc<App>, bl: Backlight) -> gtk::Box {
     });
     row.append(&scale);
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output(name: &str, x: i32, w: i32, h: i32, rotation: u32) -> Output {
+        Output {
+            name: name.into(),
+            x,
+            y: 0,
+            width: w,
+            height: h,
+            scale: 1.0,
+            physical_width: w,
+            physical_height: h,
+            mm_width: 0,
+            mm_height: 0,
+            focused: false,
+            rotation: Some(rotation),
+        }
+    }
+
+    #[test]
+    fn screens_are_numbered_left_to_right_whatever_order_they_come_in() {
+        let list = [output("HDMI-A-1", 1920, 2560, 1440, 0), output("eDP-1", 0, 1920, 1080, 0)];
+        assert_eq!(screen_numbers(&list), vec![2, 1]);
+    }
+
+    #[test]
+    fn a_staged_quarter_turn_stands_the_preview_on_its_side() {
+        let list = [output("DP-1", 0, 2560, 1440, 0)];
+        let turned = [Change {
+            name: "DP-1".into(),
+            rotation: Some(1),
+            ..Change::default()
+        }];
+        let p = &preview_screens(&list, &turned)[0];
+        assert_eq!((p.w, p.h), (1440.0, 2560.0));
+        assert_eq!(orientation_text(p), "Portrait · 90°");
+        // A half turn keeps the shape.
+        let flipped = [Change {
+            name: "DP-1".into(),
+            rotation: Some(2),
+            ..Change::default()
+        }];
+        let p = &preview_screens(&list, &flipped)[0];
+        assert_eq!((p.w, p.h), (2560.0, 1440.0));
+        assert_eq!(orientation_text(p), "Landscape · 180°");
+    }
+
+    #[test]
+    fn turning_a_portrait_screen_back_makes_it_wide_again() {
+        // Reported already turned: 1440 wide, 2560 tall.
+        let list = [output("DP-1", 0, 1440, 2560, 1)];
+        let upright = [Change {
+            name: "DP-1".into(),
+            rotation: Some(0),
+            ..Change::default()
+        }];
+        let p = &preview_screens(&list, &upright)[0];
+        assert_eq!((p.w, p.h), (2560.0, 1440.0));
+    }
+
+    #[test]
+    fn a_staged_scale_and_position_move_and_resize_the_preview() {
+        let list = [output("DP-1", 0, 2560, 1440, 0)];
+        let staged = [Change {
+            name: "DP-1".into(),
+            scale: Some(2.0),
+            position: Some((100, 50)),
+            ..Change::default()
+        }];
+        let p = &preview_screens(&list, &staged)[0];
+        assert_eq!((p.x, p.y, p.w, p.h), (100.0, 50.0, 1280.0, 720.0));
+    }
 }
