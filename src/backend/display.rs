@@ -40,6 +40,9 @@ pub struct Output {
     pub mm_width: i32,
     pub mm_height: i32,
     pub focused: bool,
+    /// Quarter turns counter-clockwise, 0–3. `None` when the compositor is
+    /// too old to rotate screens (raven_shell_v1 before version 5).
+    pub rotation: Option<u32>,
 }
 
 impl Output {
@@ -53,16 +56,21 @@ impl Output {
     }
 }
 
-/// One staged change; `scale` of 0 means automatic.
+/// One staged change; `scale` of 0 means automatic, `rotation` is quarter
+/// turns counter-clockwise, 0–3.
 #[derive(Debug, Clone, Default)]
 pub struct Change {
     pub name: String,
     pub position: Option<(i32, i32)>,
     pub scale: Option<f64>,
+    pub rotation: Option<u32>,
 }
 
 #[derive(Default)]
 struct State {
+    /// The version the layout object was made at: 5 and up reports and
+    /// takes rotations.
+    version: u32,
     pending: Vec<Output>,
     outputs: Vec<Output>,
     done: bool,
@@ -101,6 +109,7 @@ impl Dispatch<RavenOutputLayoutV1, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        let rotation = (state.version >= 5).then_some(0);
         match event {
             raven_output_layout_v1::Event::Output {
                 name,
@@ -126,7 +135,14 @@ impl Dispatch<RavenOutputLayoutV1, ()> for State {
                 mm_width,
                 mm_height,
                 focused: focused == 1,
+                rotation,
             }),
+            // Sent straight after the output event it describes.
+            raven_output_layout_v1::Event::Rotation { name, rotation } => {
+                if let Some(o) = state.pending.iter_mut().rev().find(|o| o.name == name) {
+                    o.rotation = Some(rotation);
+                }
+            }
             raven_output_layout_v1::Event::Done => {
                 state.outputs = std::mem::take(&mut state.pending);
                 state.done = true;
@@ -148,7 +164,7 @@ impl Session {
         let conn = Connection::connect_to_env().context("no Wayland display")?;
         let (globals, queue) = registry_queue_init::<State>(&conn)?;
         let qh = queue.handle();
-        let manager: RavenShellManagerV1 = globals.bind(&qh, 1..=3, ()).map_err(|e| {
+        let manager: RavenShellManagerV1 = globals.bind(&qh, 1..=5, ()).map_err(|e| {
             anyhow!("the compositor does not offer raven_shell_manager_v1 ({e}); is this Huginn?")
         })?;
         if manager.version() < 3 {
@@ -161,7 +177,10 @@ impl Session {
         Ok(Self {
             conn,
             queue,
-            state: State::default(),
+            state: State {
+                version: layout.version(),
+                ..State::default()
+            },
             layout,
             _manager: manager,
         })
@@ -196,12 +215,18 @@ pub fn outputs() -> Result<Vec<Output>> {
 pub fn apply(changes: &[Change]) -> Result<Vec<Output>> {
     let mut s = Session::open()?;
     s.wait_done()?;
+    if changes.iter().any(|c| c.rotation.is_some()) && s.layout.version() < 5 {
+        bail!("the running compositor cannot rotate screens. Update RavenGUI (imlazy install) and log in again");
+    }
     for c in changes {
         if let Some((x, y)) = c.position {
             s.layout.set_position(c.name.clone(), x, y);
         }
         if let Some(scale) = c.scale {
             s.layout.set_scale(c.name.clone(), scale);
+        }
+        if let Some(rotation) = c.rotation {
+            s.layout.set_rotation(c.name.clone(), rotation);
         }
     }
     s.layout.apply();

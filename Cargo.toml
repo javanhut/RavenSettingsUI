@@ -34,6 +34,8 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 wayland-client = "0.31"
 wayland-backend = "0.3"
 wayland-scanner = "0.31"
+# The generated protocol code uses it for bitfield enums (raven_capture_v1.options).
+bitflags = "2"
 
 # raven-keycast, the keystroke overlay the Key Overlay page switches on, is a
 # binary of its own with no GTK in it; see keycast/.

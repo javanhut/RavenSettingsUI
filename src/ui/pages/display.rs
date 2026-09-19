@@ -1,4 +1,4 @@
-//! Display: each screen's scale and position through the compositor's
+//! Display: each screen's scale, rotation and position through the compositor's
 //! raven_output_layout_v1, and backlight brightness through sysfs.
 
 use std::cell::RefCell;
@@ -17,6 +17,16 @@ const SCALES: [(&str, f64); 6] = [
     ("150%", 1.5),
     ("175%", 1.75),
     ("200%", 2.0),
+];
+
+/// Quarter turns counter-clockwise, as the protocol numbers them. Named by
+/// the angle rather than "portrait left/right": which of 90 and 270 suits a
+/// monitor depends on which way it was stood up, and trying one shows it.
+const ROTATIONS: [(&str, u32); 4] = [
+    ("Normal", 0),
+    ("90°", 1),
+    ("180° (upside down)", 2),
+    ("270°", 3),
 ];
 
 pub fn build(app: &Rc<App>) -> gtk::Widget {
@@ -135,6 +145,17 @@ fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Butt
     grid.attach(&label("Scale"), 0, 0, 1, 1);
     grid.attach(&scale_dd, 1, 0, 1, 1);
 
+    let rotate_dd = gtk::DropDown::from_strings(&ROTATIONS.map(|r| r.0));
+    rotate_dd.set_selected(o.rotation.unwrap_or(0).min(3));
+    if o.rotation.is_none() {
+        rotate_dd.set_sensitive(false);
+        rotate_dd.set_tooltip_text(Some(
+            "This compositor cannot rotate screens. Update RavenGUI and log in again.",
+        ));
+    }
+    grid.attach(&label("Rotation"), 0, 2, 1, 1);
+    grid.attach(&rotate_dd, 1, 2, 1, 1);
+
     let x = gtk::SpinButton::with_range(-16384.0, 16384.0, 1.0);
     x.set_value(o.x as f64);
     let y = gtk::SpinButton::with_range(-16384.0, 16384.0, 1.0);
@@ -152,6 +173,7 @@ fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Butt
         let changes = changes.clone();
         let apply = apply.clone();
         let scale_dd = scale_dd.clone();
+        let rotate_dd = rotate_dd.clone();
         let x = x.clone();
         let y = y.clone();
         let orig = o.clone();
@@ -163,7 +185,12 @@ fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Butt
                 name: name.clone(),
                 position: None,
                 scale: None,
+                rotation: None,
             };
+            let rotation = ROTATIONS[rotate_dd.selected() as usize].1;
+            if orig.rotation.is_some_and(|r| r != rotation) {
+                change.rotation = Some(rotation);
+            }
             if (scale - orig.scale).abs() > 0.01 || (scale == 0.0 && scale_dd.selected() == 0) {
                 change.scale = Some(scale);
             }
@@ -171,7 +198,7 @@ fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Butt
             if nx != orig.x || ny != orig.y {
                 change.position = Some((nx, ny));
             }
-            if change.scale.is_some() || change.position.is_some() {
+            if change.scale.is_some() || change.position.is_some() || change.rotation.is_some() {
                 list.push(change);
             }
             apply.set_sensitive(!list.is_empty());
@@ -180,6 +207,10 @@ fn screen_card(o: &Output, changes: &Rc<RefCell<Vec<Change>>>, apply: &gtk::Butt
     {
         let stage = stage.clone();
         scale_dd.connect_selected_notify(move |_| stage());
+    }
+    {
+        let stage = stage.clone();
+        rotate_dd.connect_selected_notify(move |_| stage());
     }
     {
         let stage = stage.clone();
