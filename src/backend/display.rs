@@ -43,6 +43,9 @@ pub struct Output {
     /// Quarter turns counter-clockwise, 0–3. `None` when the compositor is
     /// too old to rotate screens (raven_shell_v1 before version 5).
     pub rotation: Option<u32>,
+    /// Whether this is the main screen. `None` when the compositor is too
+    /// old to have one (before version 7).
+    pub primary: Option<bool>,
 }
 
 impl Output {
@@ -110,6 +113,7 @@ impl Dispatch<RavenOutputLayoutV1, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         let rotation = (state.version >= 5).then_some(0);
+        let primary = (state.version >= 7).then_some(false);
         match event {
             raven_output_layout_v1::Event::Output {
                 name,
@@ -136,7 +140,14 @@ impl Dispatch<RavenOutputLayoutV1, ()> for State {
                 mm_height,
                 focused: focused == 1,
                 rotation,
+                primary,
             }),
+            // After every output event: mark the one it names.
+            raven_output_layout_v1::Event::Primary { name } => {
+                for o in &mut state.pending {
+                    o.primary = Some(o.name == name);
+                }
+            }
             // Sent straight after the output event it describes.
             raven_output_layout_v1::Event::Rotation { name, rotation } => {
                 if let Some(o) = state.pending.iter_mut().rev().find(|o| o.name == name) {
@@ -164,7 +175,7 @@ impl Session {
         let conn = Connection::connect_to_env().context("no Wayland display")?;
         let (globals, queue) = registry_queue_init::<State>(&conn)?;
         let qh = queue.handle();
-        let manager: RavenShellManagerV1 = globals.bind(&qh, 1..=6, ()).map_err(|e| {
+        let manager: RavenShellManagerV1 = globals.bind(&qh, 1..=7, ()).map_err(|e| {
             anyhow!("the compositor does not offer raven_shell_manager_v1 ({e}); is this Huginn?")
         })?;
         if manager.version() < 3 {
@@ -223,11 +234,20 @@ pub fn identify() -> Result<()> {
 
 /// Stage every change, apply them together, and return the arrangement the
 /// compositor settled on (it may have nudged overlapping screens apart).
-pub fn apply(changes: &[Change]) -> Result<Vec<Output>> {
+///
+/// `primary` is the main screen to set: `Some(None)` for none, `None` to
+/// leave it as it is.
+pub fn apply(changes: &[Change], primary: Option<Option<String>>) -> Result<Vec<Output>> {
     let mut s = Session::open()?;
     s.wait_done()?;
     if changes.iter().any(|c| c.rotation.is_some()) && s.layout.version() < 5 {
         bail!("the running compositor cannot rotate screens. Update RavenGUI (imlazy install) and log in again");
+    }
+    if let Some(primary) = primary {
+        if s.layout.version() < 7 {
+            bail!("the running compositor cannot set a main display. Update RavenGUI (imlazy install) and log in again");
+        }
+        s.layout.set_primary(primary.unwrap_or_default());
     }
     for c in changes {
         if let Some((x, y)) = c.position {

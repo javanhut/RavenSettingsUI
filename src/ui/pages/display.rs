@@ -1,7 +1,8 @@
 //! Display: each screen's scale, rotation and position through the compositor's
 //! raven_output_layout_v1, and backlight brightness through sysfs.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -29,6 +30,81 @@ const ROTATIONS: [(&str, u32); 4] = [
     ("270°", 3),
 ];
 
+/// What the page holds while it is up: the screens as last reported, what
+/// has been staged on top of them, and the preview's working state.
+struct Page {
+    outputs: RefCell<Vec<Output>>,
+    changes: RefCell<Vec<Change>>,
+    /// A main display picked and not yet applied: `Some(None)` is "none".
+    primary: RefCell<Option<Option<String>>>,
+    /// Each card's position boxes, by connector, so a drag in the preview
+    /// can move them -- and through them stage the position, one path for
+    /// both.
+    spins: RefCell<HashMap<String, (gtk::SpinButton, gtk::SpinButton)>>,
+    /// How the preview maps the desktop onto the widget: offset and scale.
+    /// Held still for the length of a drag, or the picture would re-fit
+    /// under the pointer as the screen being dragged changes its extent.
+    view: Cell<Option<View>>,
+    drag: RefCell<Option<Drag>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct View {
+    ox: f64,
+    oy: f64,
+    fit: f64,
+}
+
+/// A screen being dragged in the preview.
+#[derive(Debug, Clone)]
+struct Drag {
+    name: String,
+    /// Where it was, in desktop pixels, when the drag began.
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    /// Every other screen, `(x, y, w, h)`.
+    others: Vec<(f64, f64, f64, f64)>,
+}
+
+impl Page {
+    /// The main display as it will be once applied.
+    fn primary_name(&self) -> Option<String> {
+        match &*self.primary.borrow() {
+            Some(staged) => staged.clone(),
+            None => self
+                .outputs
+                .borrow()
+                .iter()
+                .find(|o| o.primary == Some(true))
+                .map(|o| o.name.clone()),
+        }
+    }
+
+    fn preview(&self) -> Vec<PreviewScreen> {
+        preview_screens(
+            &self.outputs.borrow(),
+            &self.changes.borrow(),
+            self.primary_name().as_deref(),
+        )
+    }
+
+    /// Move a card's position boxes, which stage the position.
+    fn set_position(&self, name: &str, x: f64, y: f64) {
+        let spins = self.spins.borrow().get(name).cloned();
+        if let Some((sx, sy)) = spins {
+            sx.set_value(x.round());
+            sy.set_value(y.round());
+        }
+    }
+
+    /// Whether anything is staged at all.
+    fn dirty(&self) -> bool {
+        !self.changes.borrow().is_empty() || self.primary.borrow().is_some()
+    }
+}
+
 pub fn build(app: &Rc<App>) -> gtk::Widget {
     let (root, content) = widgets::page("Display", "Screens, arrangement and brightness.");
 
@@ -36,31 +112,112 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     banner.set_revealed(false);
     content.append(&banner);
 
-    let outputs: Rc<RefCell<Vec<Output>>> = Rc::new(RefCell::new(vec![]));
-    let changes: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(vec![]));
+    let page = Rc::new(Page {
+        outputs: RefCell::new(vec![]),
+        changes: RefCell::new(vec![]),
+        primary: RefCell::new(None),
+        spins: RefCell::new(HashMap::new()),
+        view: Cell::new(None),
+        drag: RefCell::new(None),
+    });
+
+    let apply = gtk::Button::with_label("Apply");
+    apply.add_css_class("suggested-action");
+    apply.set_halign(gtk::Align::End);
+    apply.set_sensitive(false);
 
     // The arrangement as it will be once applied: every staged position,
-    // scale and rotation drawn before anything is sent, numbered the way
-    // Huginn numbers the screens themselves.
+    // scale, rotation and main display drawn before anything is sent,
+    // numbered the way Huginn numbers the screens themselves. Screens are
+    // dragged into place here.
     let identify = gtk::Button::with_label("Identify displays");
     identify.set_tooltip_text(Some("Show each screen's number on it for a few seconds"));
     let arrangement = widgets::card_with_control(
         "Arrangement",
-        "Numbered left to right, as the overview and Identify show them",
+        "Drag screens to match your desk. The main display is 1, the rest left to right",
         &identify,
     );
     let preview = gtk::DrawingArea::new();
-    preview.set_content_height(220);
+    preview.set_content_height(240);
     preview.set_hexpand(true);
     {
-        let outputs = outputs.clone();
-        let changes = changes.clone();
+        let page = page.clone();
         preview.set_draw_func(move |area, cr, width, height| {
-            let screens = preview_screens(&outputs.borrow(), &changes.borrow());
-            draw_preview(cr, width as f64, height as f64, &area.color(), &screens);
+            let screens = page.preview();
+            let view = match (page.view.get(), page.drag.borrow().is_some()) {
+                (Some(view), true) => view,
+                _ => fit_view(&screens, width as f64, height as f64),
+            };
+            page.view.set(Some(view));
+            draw_preview(cr, view, &area.color(), &screens);
         });
     }
+    {
+        let drag = gtk::GestureDrag::new();
+        {
+            let page = page.clone();
+            drag.connect_drag_begin(move |gesture, wx, wy| {
+                let Some(view) = page.view.get() else {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                };
+                let (px, py) = ((wx - view.ox) / view.fit, (wy - view.oy) / view.fit);
+                let screens = page.preview();
+                let Some(hit) = screens
+                    .iter()
+                    .find(|s| px >= s.x && px < s.x + s.w && py >= s.y && py < s.y + s.h)
+                else {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                };
+                let others = screens
+                    .iter()
+                    .filter(|s| s.name != hit.name)
+                    .map(|s| (s.x, s.y, s.w, s.h))
+                    .collect();
+                *page.drag.borrow_mut() = Some(Drag {
+                    name: hit.name.clone(),
+                    x: hit.x,
+                    y: hit.y,
+                    w: hit.w,
+                    h: hit.h,
+                    others,
+                });
+            });
+        }
+        {
+            let page = page.clone();
+            drag.connect_drag_update(move |_, dx, dy| {
+                let (Some(d), Some(view)) = (page.drag.borrow().clone(), page.view.get()) else {
+                    return;
+                };
+                let wanted = (d.x + dx / view.fit, d.y + dy / view.fit);
+                // Ten widget pixels of pull, whatever the zoom.
+                let (x, y) = snap(wanted, (d.w, d.h), &d.others, 10.0 / view.fit);
+                page.set_position(&d.name, x, y);
+            });
+        }
+        {
+            let page = page.clone();
+            let preview = preview.clone();
+            drag.connect_drag_end(move |_, dx, dy| {
+                let (Some(d), Some(view)) = (page.drag.borrow_mut().take(), page.view.get()) else {
+                    return;
+                };
+                let wanted = (d.x + dx / view.fit, d.y + dy / view.fit);
+                let snapped = snap(wanted, (d.w, d.h), &d.others, 10.0 / view.fit);
+                // Let go, it joins the desktop: an edge against another
+                // screen, and over none of them.
+                let (x, y) = attach(snapped, (d.w, d.h), &d.others);
+                page.set_position(&d.name, x, y);
+                preview.queue_draw();
+            });
+        }
+        preview.add_controller(drag);
+    }
     arrangement.append(&preview);
+    let main_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    arrangement.append(&main_row);
     content.append(&arrangement);
     {
         let app = app.clone();
@@ -83,41 +240,38 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let (bl_card, bl_body) = widgets::card("Brightness", "Built-in display backlight");
     content.append(&bl_card);
 
-    let apply = gtk::Button::with_label("Apply");
-    apply.add_css_class("suggested-action");
-    apply.set_halign(gtk::Align::End);
-    apply.set_sensitive(false);
-
     let load = {
-        let app = app.clone();
         let screens = screens.clone();
         let banner = banner.clone();
-        let outputs = outputs.clone();
-        let changes = changes.clone();
+        let page = page.clone();
         let apply = apply.clone();
         let preview = preview.clone();
+        let main_row = main_row.clone();
         Rc::new(move || {
-            let app = app.clone();
             let screens = screens.clone();
             let banner = banner.clone();
-            let outputs = outputs.clone();
-            let changes = changes.clone();
+            let page = page.clone();
             let apply = apply.clone();
             let preview = preview.clone();
+            let main_row = main_row.clone();
             spawn(display::outputs, move |r| match r {
                 Ok(list) => {
                     banner.set_revealed(false);
-                    *outputs.borrow_mut() = list.clone();
-                    changes.borrow_mut().clear();
+                    *page.outputs.borrow_mut() = list.clone();
+                    page.changes.borrow_mut().clear();
+                    *page.primary.borrow_mut() = None;
+                    page.spins.borrow_mut().clear();
                     apply.set_sensitive(false);
                     widgets::clear_box(&screens);
-                    let numbers = screen_numbers(&list);
-                    for (o, number) in list.iter().zip(numbers) {
-                        screens.append(&screen_card(o, number, &changes, &apply, &preview));
+                    let numbers = screen_numbers(&list, primary_index(&list));
+                    let mut order: Vec<usize> = (0..list.len()).collect();
+                    order.sort_by_key(|&i| numbers[i]);
+                    for &i in &order {
+                        screens.append(&screen_card(&list[i], numbers[i], &page, &apply, &preview));
                     }
+                    fill_main_row(&main_row, &list, &numbers, &order, &page, &apply, &preview);
                     preview.queue_draw();
                     screens.append(&apply);
-                    let _ = &app;
                 }
                 Err(e) => {
                     banner.set_title(&format!("Screens cannot be arranged here: {e}"));
@@ -128,15 +282,16 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     };
     {
         let app = app.clone();
-        let changes = changes.clone();
+        let page = page.clone();
         let load = load.clone();
         apply.connect_clicked(move |b| {
             b.set_sensitive(false);
-            let staged = changes.borrow().clone();
+            let staged = with_every_position(&page.outputs.borrow(), &page.changes.borrow());
+            let primary = page.primary.borrow().clone();
             let app = app.clone();
             let load = load.clone();
             spawn(
-                move || display::apply(&staged),
+                move || display::apply(&staged, primary),
                 move |r| {
                     match r {
                         Ok(_) => app.toast("Display settings applied"),
@@ -159,12 +314,63 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     root.upcast()
 }
 
-/// Each screen's number, as Huginn badges it in the overview: left to
-/// right, then top to bottom, from 1. Keep in step with
+/// The "Main display" picker under the preview.
+fn fill_main_row(
+    row: &gtk::Box,
+    list: &[Output],
+    numbers: &[u32],
+    order: &[usize],
+    page: &Rc<Page>,
+    apply: &gtk::Button,
+    preview: &gtk::DrawingArea,
+) {
+    widgets::clear_box(row);
+    row.append(&label("Main display"));
+    let mut names: Vec<String> = vec!["None (panels follow the pointer)".into()];
+    let mut choices: Vec<Option<String>> = vec![None];
+    for &i in order {
+        names.push(format!("Display {} ({})", numbers[i], list[i].name));
+        choices.push(Some(list[i].name.clone()));
+    }
+    let strings: Vec<&str> = names.iter().map(String::as_str).collect();
+    let dd = gtk::DropDown::from_strings(&strings);
+    let current = list.iter().find(|o| o.primary == Some(true)).map(|o| o.name.clone());
+    let selected = choices.iter().position(|c| *c == current).unwrap_or(0);
+    dd.set_selected(selected as u32);
+    dd.set_tooltip_text(Some(
+        "The dock and panels stay on it, new windows open there, and focus starts there",
+    ));
+    if list.iter().all(|o| o.primary.is_none()) {
+        dd.set_sensitive(false);
+        dd.set_tooltip_text(Some(
+            "This compositor cannot set a main display. Update RavenGUI and log in again.",
+        ));
+    }
+    {
+        let page = page.clone();
+        let apply = apply.clone();
+        let preview = preview.clone();
+        dd.connect_selected_notify(move |dd| {
+            let pick = choices.get(dd.selected() as usize).cloned().flatten();
+            *page.primary.borrow_mut() = (pick != current).then_some(pick);
+            apply.set_sensitive(page.dirty());
+            preview.queue_draw();
+        });
+    }
+    row.append(&dd);
+}
+
+/// The index of the main screen in `list`, as the compositor reported it.
+fn primary_index(list: &[Output]) -> Option<usize> {
+    list.iter().position(|o| o.primary == Some(true))
+}
+
+/// Each screen's number, as Huginn badges it: the main screen 1, then the
+/// rest left to right and top to bottom. Keep in step with
 /// `huginn-comp/src/overview.rs`'s `screen_numbers`.
-fn screen_numbers(outputs: &[Output]) -> Vec<u32> {
+fn screen_numbers(outputs: &[Output], primary: Option<usize>) -> Vec<u32> {
     let mut order: Vec<usize> = (0..outputs.len()).collect();
-    order.sort_by_key(|&i| (outputs[i].x, outputs[i].y));
+    order.sort_by_key(|&i| (Some(i) != primary, outputs[i].x, outputs[i].y));
     let mut numbers = vec![0; outputs.len()];
     for (rank, i) in order.into_iter().enumerate() {
         numbers[i] = rank as u32 + 1;
@@ -172,14 +378,116 @@ fn screen_numbers(outputs: &[Output]) -> Vec<u32> {
     numbers
 }
 
+/// The staged changes, with every screen's position pinned whenever any
+/// position is being set.
+///
+/// Huginn places a screen with no saved position to the right of the
+/// others. Dragging one screen and sending only its position would leave
+/// the rest to that rule, which is not the arrangement on the page -- so the
+/// whole arrangement is sent, exactly as drawn.
+fn with_every_position(outputs: &[Output], changes: &[Change]) -> Vec<Change> {
+    let mut out = changes.to_vec();
+    if !out.iter().any(|c| c.position.is_some()) {
+        return out;
+    }
+    for o in outputs {
+        match out.iter_mut().find(|c| c.name == o.name) {
+            Some(c) if c.position.is_none() => c.position = Some((o.x, o.y)),
+            Some(_) => {}
+            None => out.push(Change {
+                name: o.name.clone(),
+                position: Some((o.x, o.y)),
+                ..Change::default()
+            }),
+        }
+    }
+    out
+}
+
+/// Pull a dragged screen's edges onto the edges of the screens around it
+/// when they come within `threshold` desktop pixels: side by side, or lined
+/// up along the same edge. Each axis is snapped on its own, to the nearest.
+fn snap(
+    (x, y): (f64, f64),
+    (w, h): (f64, f64),
+    others: &[(f64, f64, f64, f64)],
+    threshold: f64,
+) -> (f64, f64) {
+    let nearest = |at: f64, candidates: Vec<f64>| {
+        candidates
+            .into_iter()
+            .map(|c| (c, (c - at).abs()))
+            .filter(|&(_, d)| d <= threshold)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map_or(at, |(c, _)| c)
+    };
+    let xs = others
+        .iter()
+        .flat_map(|&(ox, _, ow, _)| [ox - w, ox + ow, ox, ox + ow - w])
+        .collect();
+    let ys = others
+        .iter()
+        .flat_map(|&(_, oy, _, oh)| [oy - h, oy + oh, oy, oy + oh - h])
+        .collect();
+    (nearest(x, xs), nearest(y, ys))
+}
+
+/// Where a dropped screen goes: where it was let go if it already sits edge
+/// to edge with another screen and over none, and otherwise the nearest
+/// place that does -- beside, above or below one of the others. A screen on
+/// its own, or cut off by a gap, is one the pointer cannot reach.
+fn attach(
+    (x, y): (f64, f64),
+    (w, h): (f64, f64),
+    others: &[(f64, f64, f64, f64)],
+) -> (f64, f64) {
+    let (x, y) = (x.round(), y.round());
+    if others.is_empty() {
+        return (x, y);
+    }
+    let overlaps = |x: f64, y: f64| {
+        others
+            .iter()
+            .any(|&(ox, oy, ow, oh)| x < ox + ow && ox < x + w && y < oy + oh && oy < y + h)
+    };
+    let touches = |x: f64, y: f64| {
+        others.iter().any(|&(ox, oy, ow, oh)| {
+            let across = y < oy + oh && oy < y + h;
+            let along = x < ox + ow && ox < x + w;
+            (across && (x + w == ox || ox + ow == x)) || (along && (y + h == oy || oy + oh == y))
+        })
+    };
+    if !overlaps(x, y) && touches(x, y) {
+        return (x, y);
+    }
+    others
+        .iter()
+        .flat_map(|&(ox, oy, ow, oh)| {
+            // Kept overlapping along the shared edge by at least a pixel, so
+            // the two really do meet.
+            let cy = y.clamp(oy - h + 1.0, oy + oh - 1.0);
+            let cx = x.clamp(ox - w + 1.0, ox + ow - 1.0);
+            [(ox + ow, cy), (ox - w, cy), (cx, oy - h), (cx, oy + oh)]
+        })
+        .filter(|&(cx, cy)| !overlaps(cx, cy))
+        .min_by(|a, b| {
+            let d = |p: &(f64, f64)| (p.0 - x).hypot(p.1 - y);
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap_or((x, y))
+}
+
 fn screen_card(
     o: &Output,
     number: u32,
-    changes: &Rc<RefCell<Vec<Change>>>,
+    page: &Rc<Page>,
     apply: &gtk::Button,
     preview: &gtk::DrawingArea,
 ) -> gtk::Box {
     let mut title = format!("Display {number}  ({})", o.name);
+    if o.primary == Some(true) {
+        title.push_str("  · Main");
+    }
     if o.focused {
         title.push_str("  (focused)");
     }
@@ -228,10 +536,14 @@ fn screen_card(
     pos.append(&y);
     grid.attach(&pos, 1, 1, 1, 1);
     body.append(&grid);
+    page
+        .spins
+        .borrow_mut()
+        .insert(o.name.clone(), (x.clone(), y.clone()));
 
     let name = o.name.clone();
     let stage = {
-        let changes = changes.clone();
+        let page = page.clone();
         let apply = apply.clone();
         let scale_dd = scale_dd.clone();
         let rotate_dd = rotate_dd.clone();
@@ -240,7 +552,7 @@ fn screen_card(
         let y = y.clone();
         let orig = o.clone();
         Rc::new(move || {
-            let mut list = changes.borrow_mut();
+            let mut list = page.changes.borrow_mut();
             list.retain(|c| c.name != name);
             let scale = SCALES[scale_dd.selected() as usize].1;
             let mut change = Change {
@@ -263,8 +575,8 @@ fn screen_card(
             if change.scale.is_some() || change.position.is_some() || change.rotation.is_some() {
                 list.push(change);
             }
-            apply.set_sensitive(!list.is_empty());
             drop(list);
+            apply.set_sensitive(page.dirty());
             preview.queue_draw();
         })
     };
@@ -297,6 +609,7 @@ struct PreviewScreen {
     /// Quarter turns counter-clockwise, 0–3.
     rotation: u32,
     focused: bool,
+    primary: bool,
 }
 
 /// The screens with every staged change folded in. A quarter turn that
@@ -304,8 +617,14 @@ struct PreviewScreen {
 /// the screen by how much denser or sparser it gets. "Automatic" is left at
 /// the size it has now, since only the compositor knows what that works out
 /// to -- Apply shows the truth.
-fn preview_screens(outputs: &[Output], changes: &[Change]) -> Vec<PreviewScreen> {
-    let numbers = screen_numbers(outputs);
+fn preview_screens(
+    outputs: &[Output],
+    changes: &[Change],
+    primary: Option<&str>,
+) -> Vec<PreviewScreen> {
+    // Numbered as they are now, so the preview agrees with the cards and
+    // with the badges on the screens; Apply renumbers all three together.
+    let numbers = screen_numbers(outputs, primary_index(outputs));
     outputs
         .iter()
         .zip(numbers)
@@ -332,6 +651,7 @@ fn preview_screens(outputs: &[Output], changes: &[Change]) -> Vec<PreviewScreen>
                 h,
                 rotation,
                 focused: o.focused,
+                primary: primary == Some(o.name.as_str()),
             }
         })
         .collect()
@@ -373,28 +693,35 @@ fn centred_text(cr: &gtk::cairo::Context, text: &str, cx: f64, cy: f64) {
     }
 }
 
+/// Fit the whole desktop into the widget, with room round the edge, centred.
+fn fit_view(screens: &[PreviewScreen], width: f64, height: f64) -> View {
+    if screens.is_empty() {
+        return View { ox: 0.0, oy: 0.0, fit: 1.0 };
+    }
+    let left = screens.iter().map(|s| s.x).fold(f64::INFINITY, f64::min);
+    let top = screens.iter().map(|s| s.y).fold(f64::INFINITY, f64::min);
+    let right = screens.iter().map(|s| s.x + s.w).fold(f64::NEG_INFINITY, f64::max);
+    let bottom = screens.iter().map(|s| s.y + s.h).fold(f64::NEG_INFINITY, f64::max);
+    // Room to drag a screen out past the others without leaving the widget.
+    let pad = 28.0;
+    let fit = ((width - pad * 2.0) / (right - left).max(1.0))
+        .min((height - pad * 2.0) / (bottom - top).max(1.0))
+        .max(1e-4);
+    View {
+        ox: (width - (right - left) * fit) / 2.0 - left * fit,
+        oy: (height - (bottom - top) * fit) / 2.0 - top * fit,
+        fit,
+    }
+}
+
 fn draw_preview(
     cr: &gtk::cairo::Context,
-    width: f64,
-    height: f64,
+    View { ox, oy, fit }: View,
     fg: &gtk::gdk::RGBA,
     screens: &[PreviewScreen],
 ) {
     use gtk::cairo::{FontSlant, FontWeight};
     let (r, g, b) = (fg.red() as f64, fg.green() as f64, fg.blue() as f64);
-    if screens.is_empty() {
-        return;
-    }
-    // Fit the whole desktop, with room round the edge, and centre it.
-    let left = screens.iter().map(|s| s.x).fold(f64::INFINITY, f64::min);
-    let top = screens.iter().map(|s| s.y).fold(f64::INFINITY, f64::min);
-    let right = screens.iter().map(|s| s.x + s.w).fold(f64::NEG_INFINITY, f64::max);
-    let bottom = screens.iter().map(|s| s.y + s.h).fold(f64::NEG_INFINITY, f64::max);
-    let pad = 16.0;
-    let fit = ((width - pad * 2.0) / (right - left).max(1.0))
-        .min((height - pad * 2.0) / (bottom - top).max(1.0));
-    let ox = (width - (right - left) * fit) / 2.0 - left * fit;
-    let oy = (height - (bottom - top) * fit) / 2.0 - top * fit;
     // A hairline apart, so screens that touch still read as two.
     let gap = 3.0;
 
@@ -424,6 +751,15 @@ fn draw_preview(
         cr.set_font_size(side * 0.6);
         cr.set_source_rgb(BADGE_TEXT.0, BADGE_TEXT.1, BADGE_TEXT.2);
         centred_text(cr, &s.number.to_string(), cx, cy);
+
+        // The main display says so, in the top-left corner.
+        if s.primary && w > 50.0 && h > 40.0 {
+            cr.select_font_face("Sans", FontSlant::Normal, FontWeight::Bold);
+            cr.set_font_size(10.0);
+            cr.set_source_rgb(ACCENT.0, ACCENT.1, ACCENT.2);
+            cr.move_to(x + 8.0, y + 16.0);
+            let _ = cr.show_text("MAIN");
+        }
 
         // The connector and the orientation under it, when there is room.
         let below = cy + side / 2.0;
@@ -530,13 +866,82 @@ mod tests {
             mm_height: 0,
             focused: false,
             rotation: Some(rotation),
+            primary: Some(false),
         }
     }
 
     #[test]
     fn screens_are_numbered_left_to_right_whatever_order_they_come_in() {
         let list = [output("HDMI-A-1", 1920, 2560, 1440, 0), output("eDP-1", 0, 1920, 1080, 0)];
-        assert_eq!(screen_numbers(&list), vec![2, 1]);
+        assert_eq!(screen_numbers(&list, None), vec![2, 1]);
+        assert_eq!(screen_numbers(&list, Some(0)), vec![1, 2], "the main one is 1");
+    }
+
+    const LAPTOP: (f64, f64, f64, f64) = (0.0, 0.0, 1920.0, 1080.0);
+
+    #[test]
+    fn a_screen_dragged_near_an_edge_snaps_onto_it() {
+        // Dropped a little right of the laptop and a little low: pulled flush
+        // to its right edge and level with its top.
+        let at = snap((1935.0, 8.0), (2560.0, 1440.0), &[LAPTOP], 20.0);
+        assert_eq!(at, (1920.0, 0.0));
+        // Too far to pull: left where it was.
+        assert_eq!(snap((2100.0, 300.0), (2560.0, 1440.0), &[LAPTOP], 20.0), (2100.0, 300.0));
+    }
+
+    #[test]
+    fn a_dropped_screen_touching_another_stays_put() {
+        assert_eq!(attach((1920.0, 300.0), (2560.0, 1440.0), &[LAPTOP]), (1920.0, 300.0));
+        // Above, offset to the right, still sharing some of the edge.
+        assert_eq!(attach((500.0, -1440.0), (2560.0, 1440.0), &[LAPTOP]), (500.0, -1440.0));
+    }
+
+    #[test]
+    fn a_screen_left_floating_or_overlapping_is_moved_to_the_nearest_edge() {
+        // A gap to the right: pulled back against the laptop.
+        assert_eq!(attach((2200.0, 100.0), (1920.0, 1080.0), &[LAPTOP]), (1920.0, 100.0));
+        // Dropped mostly on top of it, towards the bottom: out below.
+        assert_eq!(attach((200.0, 900.0), (1920.0, 1080.0), &[LAPTOP]), (200.0, 1080.0));
+        // Only corner to corner: slid until they share an edge.
+        let (x, y) = attach((1920.0, 1080.0), (1920.0, 1080.0), &[LAPTOP]);
+        assert!(x < 1920.0 || y < 1080.0, "({x}, {y}) still only meets at a corner");
+    }
+
+    #[test]
+    fn a_drop_between_two_screens_lands_on_neither() {
+        let right = (1920.0, 0.0, 1920.0, 1080.0);
+        let (x, y) = attach((1000.0, 200.0), (1920.0, 1080.0), &[LAPTOP, right]);
+        for (ox, oy, ow, oh) in [LAPTOP, right] {
+            assert!(!(x < ox + ow && ox < x + 1920.0 && y < oy + oh && oy < y + 1080.0));
+        }
+    }
+
+    #[test]
+    fn moving_one_screen_pins_every_other_where_it_is() {
+        let list = [output("eDP-1", 0, 1920, 1080, 0), output("DP-1", 1920, 2560, 1440, 0)];
+        let moved = [Change {
+            name: "DP-1".into(),
+            position: Some((0, -1440)),
+            ..Change::default()
+        }];
+        let sent = with_every_position(&list, &moved);
+        assert_eq!(sent.len(), 2);
+        assert!(sent.iter().any(|c| c.name == "eDP-1" && c.position == Some((0, 0))));
+        assert!(sent.iter().any(|c| c.name == "DP-1" && c.position == Some((0, -1440))));
+        // Nothing moved: nothing pinned.
+        let scaled = [Change {
+            name: "DP-1".into(),
+            scale: Some(1.5),
+            ..Change::default()
+        }];
+        assert_eq!(with_every_position(&list, &scaled).len(), 1);
+    }
+
+    #[test]
+    fn the_staged_main_display_is_marked_in_the_preview() {
+        let list = [output("eDP-1", 0, 1920, 1080, 0), output("DP-1", 1920, 2560, 1440, 0)];
+        let p = preview_screens(&list, &[], Some("DP-1"));
+        assert!(!p[0].primary && p[1].primary);
     }
 
     #[test]
@@ -547,7 +952,7 @@ mod tests {
             rotation: Some(1),
             ..Change::default()
         }];
-        let p = &preview_screens(&list, &turned)[0];
+        let p = &preview_screens(&list, &turned, None)[0];
         assert_eq!((p.w, p.h), (1440.0, 2560.0));
         assert_eq!(orientation_text(p), "Portrait · 90°");
         // A half turn keeps the shape.
@@ -556,7 +961,7 @@ mod tests {
             rotation: Some(2),
             ..Change::default()
         }];
-        let p = &preview_screens(&list, &flipped)[0];
+        let p = &preview_screens(&list, &flipped, None)[0];
         assert_eq!((p.w, p.h), (2560.0, 1440.0));
         assert_eq!(orientation_text(p), "Landscape · 180°");
     }
@@ -570,7 +975,7 @@ mod tests {
             rotation: Some(0),
             ..Change::default()
         }];
-        let p = &preview_screens(&list, &upright)[0];
+        let p = &preview_screens(&list, &upright, None)[0];
         assert_eq!((p.w, p.h), (2560.0, 1440.0));
     }
 
@@ -583,7 +988,7 @@ mod tests {
             position: Some((100, 50)),
             ..Change::default()
         }];
-        let p = &preview_screens(&list, &staged)[0];
+        let p = &preview_screens(&list, &staged, None)[0];
         assert_eq!((p.x, p.y, p.w, p.h), (100.0, 50.0, 1280.0, 720.0));
     }
 }
