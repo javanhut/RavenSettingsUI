@@ -132,11 +132,21 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     // dragged into place here.
     let identify = gtk::Button::with_label("Identify displays");
     identify.set_tooltip_text(Some("Show each screen's number on it for a few seconds"));
-    let arrangement = widgets::card_with_control(
+    // A stacked card, not `card_with_control`: that one is a single row,
+    // and the preview and the picker need the card's full width below it.
+    let (arrangement, arrangement_body) = widgets::card(
         "Arrangement",
         "Drag screens to match your desk. The main display is 1, the rest left to right",
-        &identify,
     );
+    // Toolbar: the main display picker on the left, Identify on the right.
+    let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let main_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    main_row.set_hexpand(true);
+    main_row.set_valign(gtk::Align::Center);
+    identify.set_valign(gtk::Align::Center);
+    toolbar.append(&main_row);
+    toolbar.append(&identify);
+    arrangement_body.append(&toolbar);
     let preview = gtk::DrawingArea::new();
     preview.set_content_height(240);
     preview.set_hexpand(true);
@@ -215,9 +225,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         }
         preview.add_controller(drag);
     }
-    arrangement.append(&preview);
-    let main_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    arrangement.append(&main_row);
+    arrangement_body.append(&preview);
     content.append(&arrangement);
     {
         let app = app.clone();
