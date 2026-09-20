@@ -2,8 +2,8 @@
 
 One window for everything you would otherwise set with a scatter of CLIs on
 Raven Linux: Wi-Fi and wired networks, Bluetooth pairing, sound, screens and
-brightness, theme and wallpaper, the dock and bar, default applications,
-storage, privacy, updates and system information.
+brightness, theme and wallpaper, the pinned application bar and RoostBar,
+default applications, storage, privacy, updates and system information.
 
 GTK 4 + libadwaita, in Rust, following the layout of the design mockup:
 sidebar with your account and the section list, search in the header, and
@@ -37,7 +37,7 @@ setting on Raven, and says so when that component is not there.
 | Storage | `lsblk -J`, `df` | |
 | Updates | `rvn update --dry-run` (report is on stderr) | Installing opens your terminal on `rvn update`, which goes through `rvnd` on `/run/rvn/ctl` when that socket is reachable (no password), and on `sudo rvn update` otherwise. Either way prompts and `makepkg` output stay visible. |
 | General | `/etc/raven/power.toml` (read), `/run/raven-power/ctl` for sleep/restart/power off | Changing the button and lid policy rewrites root's file and restarts `powerd`; that runs in your terminal. |
-| Personalization | `$XDG_STATE_HOME/raven/pins` (dock), `~/.config/roostbar/config.toml` (bar), `~/.config/mimeapps.list` through GIO (default apps) | The compositor reads `pins` at start, so dock edits show at next login. |
+| Personalization | `$XDG_STATE_HOME/raven/pins` + `raven_shell_manager_v1.reload_pins` (raven_shell_v1 **version 8**) for the pinned application bar, `~/.config/roostbar/config.toml` (RoostBar), `~/.config/mimeapps.list` through GIO (default apps) | The compositor reads `pins` at start and holds it in memory, so the page writes the file and then sends `reload_pins`: pinning an app or moving the bar to another edge shows at once. On a compositor older than v8 the card says so and the change waits for the next login. It also watches the directory `pins` lives in, so a change made from quick settings or the dock menu shows on the open page — and is not written back over by the next change made here. Not the dock — that is the strip of running applications Huginn reveals at the bottom edge, and it is not set from here. |
 | Appearance | `~/.config/raven/desktop.toml`, read by Huginn; wallpaper via `ravencanvas set --persist`; pushed to RoostBar and GTK | See below. Without RavenCanvas, installing the wallpaper system-wide is offered as a command for your terminal. |
 | Privacy | `$XDG_STATE_HOME/raven/frecency` and app search histories | |
 | Security | `ravend` on `/run/raven-lock/verify.sock` (length-prefixed JSON, the `raven-greet-proto` wire form), which asks `raven-fprintd` | Fingerprint reader status, enrolling and removing your fingers, and whether a finger logs in, unlocks, or approves `sudo`. Enrolling and switching a use on ask for your password; ravend checks it. Fingerprint `sudo` needs one line in `/etc/pam.d/sudo`; the page offers `sudo raven-finger-auth --install-pam` in your terminal. |
@@ -68,8 +68,6 @@ clock_24h = true
 show_date = true
 
 [personalization]
-dock_position = "centre"
-dock_layout = "grid"
 bar_position = "top"
 
 [privacy]

@@ -1,4 +1,5 @@
-//! Personalization: the dock, the bar, and default applications.
+//! Personalization: the pinned application bar, RoostBar, and default
+//! applications.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -10,56 +11,75 @@ use libadwaita::prelude::*;
 use crate::backend::{apps, integrations};
 use crate::ui::{widgets, App};
 
-const DOCK_POSITIONS: [&str; 5] = ["Centre", "Top", "Bottom", "Left", "Right"];
-const DOCK_LAYOUTS: [&str; 3] = ["Grid", "Row", "Column"];
+thread_local! {
+    /// Kept alive for the life of the process; a dropped monitor stops.
+    /// Pages are built once, with the window, so this is filled once.
+    static PINS_MONITOR: RefCell<Option<gio::FileMonitor>> = const { RefCell::new(None) };
+}
 
 pub fn build(app: &Rc<App>) -> gtk::Widget {
     let (root, content) = widgets::page("Personalization", "Make the desktop yours.");
     let (row, left, right) = widgets::two_columns();
     content.append(&row);
-    left.append(&dock_card(app));
+    left.append(&pinned_card(app));
     left.append(&bar_card(app));
     right.append(&default_apps_card(app));
     root.upcast()
 }
 
-fn dock_card(app: &Rc<App>) -> gtk::Box {
+/// The pinned application bar: the rail of pinned applications that rides one
+/// edge of the screen.
+///
+/// Not the dock, which this card used to be called. The dock is the strip of
+/// *running* applications the compositor reveals at the bottom edge; it is
+/// the taskbar, it is not configured here, and calling this card "Dock" named
+/// the wrong thing.
+fn pinned_card(app: &Rc<App>) -> gtk::Box {
+    // Whether the compositor takes `reload_pins`, asked once: it decides what
+    // this card promises, and it cannot change while the page is open.
+    let live = integrations::pins_apply_live();
     let (card, body) = widgets::card(
-        "Dock",
-        "Pinned apps. Changes take effect at your next login: the desktop reads this at start.",
+        "Pinned application bar",
+        if live {
+            "The rail of pinned applications along one edge of the screen. Changes show up straight away."
+        } else {
+            "The rail of pinned applications along one edge of the screen. This compositor is too old to be told about a change, so one takes effect at your next login. Update RavenGUI (imlazy install)."
+        },
     );
-    let (position, orientation, pins) = integrations::read_pins();
+    let (position, pins) = integrations::read_pins();
     let pins = Rc::new(RefCell::new(pins));
     let position = Rc::new(RefCell::new(position));
-    let orientation = Rc::new(RefCell::new(orientation));
 
     let write = {
         let app = app.clone();
         let pins = pins.clone();
         let position = position.clone();
-        let orientation = orientation.clone();
         Rc::new(move || {
-            if let Err(e) =
-                integrations::write_pins(&position.borrow(), &orientation.borrow(), &pins.borrow())
-            {
-                app.error("Could not save dock", &e);
+            if let Err(e) = integrations::write_pins(&position.borrow(), &pins.borrow()) {
+                app.error("Could not save the pinned application bar", &e);
+                return;
             }
-            {
-                let mut c = app.config.borrow_mut();
-                c.personalization.dock_position = position.borrow().to_lowercase();
-                c.personalization.dock_layout = orientation.borrow().to_lowercase();
+            // The compositor read this file at startup and has held it in
+            // memory since, so writing it is only half the change: without
+            // this it would show nothing new until the next login, and would
+            // write its own copy back over the edit the moment anything else
+            // touched the pins.
+            if live {
+                if let Err(e) = integrations::reload_pins() {
+                    app.error("Could not update the pinned application bar", &e);
+                }
             }
-            app.save();
         })
     };
 
     let list = widgets::list();
     let pos_row = adw::ComboRow::builder()
         .title("Position")
-        .model(&gtk::StringList::new(&DOCK_POSITIONS))
+        .subtitle("Which edge the bar rides. Left or right runs it down the screen, top or bottom across it.")
+        .model(&gtk::StringList::new(&integrations::PIN_POSITIONS))
         .build();
     pos_row.set_selected(
-        DOCK_POSITIONS
+        integrations::PIN_POSITIONS
             .iter()
             .position(|p| p.eq_ignore_ascii_case(&position.borrow()))
             .unwrap_or(0) as u32,
@@ -68,30 +88,15 @@ fn dock_card(app: &Rc<App>) -> gtk::Box {
         let write = write.clone();
         let position = position.clone();
         pos_row.connect_selected_notify(move |r| {
-            *position.borrow_mut() = DOCK_POSITIONS[r.selected() as usize].to_string();
+            let chosen = integrations::PIN_POSITIONS[r.selected() as usize];
+            if position.borrow().eq_ignore_ascii_case(chosen) {
+                return;
+            }
+            *position.borrow_mut() = chosen.to_string();
             write();
         });
     }
     list.append(&pos_row);
-    let lay_row = adw::ComboRow::builder()
-        .title("Layout")
-        .model(&gtk::StringList::new(&DOCK_LAYOUTS))
-        .build();
-    lay_row.set_selected(
-        DOCK_LAYOUTS
-            .iter()
-            .position(|p| p.eq_ignore_ascii_case(&orientation.borrow()))
-            .unwrap_or(0) as u32,
-    );
-    {
-        let write = write.clone();
-        let orientation = orientation.clone();
-        lay_row.connect_selected_notify(move |r| {
-            *orientation.borrow_mut() = DOCK_LAYOUTS[r.selected() as usize].to_string();
-            write();
-        });
-    }
-    list.append(&lay_row);
     body.append(&list);
 
     let pinned = widgets::list();
@@ -166,7 +171,89 @@ fn dock_card(app: &Rc<App>) -> gtk::Box {
             });
         });
     }
+
+    // The page is not the only one who changes this. Quick settings has a
+    // row for the edge, and the dock's menu pins and unpins, and the
+    // compositor writes the file on each. Without this the card would go on
+    // showing what the file said when the window opened — and, worse, the
+    // next change made here would write that stale picture back over
+    // whatever quick settings had done.
+    watch_pins({
+        let pins = pins.clone();
+        let position = position.clone();
+        let pos_row = pos_row.clone();
+        let render = render.clone();
+        Rc::new(move || {
+            let (edge, list) = integrations::read_pins();
+            // Our own write lands here too, and reads back as what is
+            // already on screen. Comparing rather than redrawing is what
+            // keeps that from becoming a loop.
+            if edge == *position.borrow() && list == *pins.borrow() {
+                return;
+            }
+            *position.borrow_mut() = edge.clone();
+            *pins.borrow_mut() = list;
+            // Moving the row fires its handler, which writes. It returns
+            // early when the edge it reads already matches, and it does:
+            // the line above has just set it.
+            if let Some(i) = integrations::PIN_POSITIONS
+                .iter()
+                .position(|p| p.eq_ignore_ascii_case(&edge))
+            {
+                pos_row.set_selected(i as u32);
+            }
+            render();
+        })
+    });
     card
+}
+
+/// Call `reload` whenever the pins file changes underneath the page.
+///
+/// The directory is watched rather than the file: the file is replaced by a
+/// rename — both writers are careful never to leave a half-written one — and
+/// a watch on the old inode would go deaf the first time that happened. The
+/// launch history is written into the same directory on every application
+/// launch, so events are filtered by name rather than acted on wholesale.
+///
+/// A file watch rather than something on `raven_shell_v1`: the file is
+/// already the contract between the two processes, and the compositor
+/// already writes it on every change, so there is nothing to add on either
+/// side. Reading it back costs a few hundred bytes.
+fn watch_pins(reload: Rc<dyn Fn()>) {
+    let path = integrations::pins_path();
+    let Some(dir) = path.parent().map(std::path::Path::to_path_buf) else {
+        return;
+    };
+    let Some(name) = path.file_name().map(std::ffi::OsString::from) else {
+        return;
+    };
+    // It may not exist until something first pins something; creating it
+    // early costs nothing and lets the page be right from the start.
+    let _ = std::fs::create_dir_all(&dir);
+    let monitor = match gio::File::for_path(&dir)
+        .monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+    {
+        Ok(m) => m,
+        Err(e) => {
+            // Not fatal: the card still shows and still writes, it just
+            // stops noticing changes made elsewhere.
+            tracing::debug!("not watching {}: {e}", dir.display());
+            return;
+        }
+    };
+    monitor.connect_changed(move |_, file, other, _| {
+        // A rename reports the old path as `file` and the new one as
+        // `other`, so either may be the one we care about.
+        let ours = |f: Option<&gio::File>| {
+            f.and_then(gio::prelude::FileExt::basename)
+                .is_some_and(|b| b == std::path::Path::new(&name))
+        };
+        if ours(Some(file)) || ours(other) {
+            reload();
+        }
+    });
+    PINS_MONITOR.with(|m| *m.borrow_mut() = Some(monitor));
 }
 
 /// A dialog listing installed apps; `chosen` gets the .desktop path.

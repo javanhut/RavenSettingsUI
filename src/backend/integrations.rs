@@ -590,40 +590,86 @@ pub fn current_system_wallpaper() -> Option<PathBuf> {
         .find(|p| p.file_stem().map(|s| s == "wallpaper").unwrap_or(false))
 }
 
-/// The compositor's dock state file. It reads this at startup only, so an
-/// edit here takes effect at the next login — the page says so.
+// ---- the pinned application bar -----------------------------------------
+//
+// Not the dock. The dock is the compositor's own strip of running
+// applications along the bottom edge, and it is not configured from here.
+// This is the rail of pinned applications that rides one edge of the screen,
+// and the file below is where the desktop remembers it.
+
+/// The edges the pinned application bar can ride, in the order the
+/// compositor lists them: its default first.
+///
+/// One control, not two. Earlier releases had a position of five (including
+/// a floating centre) and a separate grid/row/column layout, which the
+/// compositor no longer reads: an edge already says which way a rail runs —
+/// down the screen on the left or right, across it on the top or bottom.
+pub const PIN_POSITIONS: [&str; 4] = ["Right", "Left", "Top", "Bottom"];
+
+/// State for the pinned application bar: which edge it rides, and what is on
+/// it, in order.
+///
+/// Written here and read by the compositor. It reads the file at startup and
+/// then holds it in memory, so a write must be followed by
+/// [`reload_pins`] for the change to be seen before the next login.
 pub fn pins_path() -> PathBuf {
     crate::config::state_dir().join("pins")
 }
 
-pub fn read_pins() -> (String, String, Vec<String>) {
-    let text = std::fs::read_to_string(pins_path()).unwrap_or_default();
-    let mut position = "Centre".to_string();
-    let mut orientation = "Grid".to_string();
+/// The edge and the pins the file names.
+///
+/// Forgiving in the same two places the compositor is, so that the page and
+/// the screen never disagree about a file an older release wrote: `Centre`,
+/// which was a fifth position when the bar floated, reads as the default
+/// edge, and an `orientation` line is skipped rather than shown.
+pub fn read_pins() -> (String, Vec<String>) {
+    parse_pins(&std::fs::read_to_string(pins_path()).unwrap_or_default())
+}
+
+fn parse_pins(text: &str) -> (String, Vec<String>) {
+    let mut position = PIN_POSITIONS[0].to_string();
     let mut pins = Vec::new();
     for line in text.lines() {
         let Some((k, v)) = line.split_once('\t') else {
             continue;
         };
-        match k {
-            "position" => position = v.trim().to_string(),
-            "orientation" => orientation = v.trim().to_string(),
-            "pin" => pins.push(v.trim().to_string()),
+        match k.trim() {
+            "position" => {
+                if let Some(p) = PIN_POSITIONS
+                    .iter()
+                    .find(|p| p.eq_ignore_ascii_case(v.trim()))
+                {
+                    position = (*p).to_string();
+                }
+            }
+            "pin" if !v.trim().is_empty() => pins.push(v.trim().to_string()),
             _ => {}
         }
     }
-    (position, orientation, pins)
+    (position, pins)
 }
 
-pub fn write_pins(position: &str, orientation: &str, pins: &[String]) -> Result<()> {
-    let mut text = format!("position\t{position}\norientation\t{orientation}\n");
+/// Rewrite the file. The pins keep their order — it is what the bar shows —
+/// so this is the one state file here that is not sorted.
+pub fn write_pins(position: &str, pins: &[String]) -> Result<()> {
+    let path = pins_path();
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    atomic_write(&path, pins_text(position, pins).as_bytes())
+}
+
+fn pins_text(position: &str, pins: &[String]) -> String {
+    let mut text = format!("position\t{position}\n");
     for p in pins {
         text.push_str(&format!("pin\t{p}\n"));
     }
-    let path = pins_path();
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    atomic_write(&path, text.as_bytes())
+    text
 }
+
+/// Tell the compositor to read the file again, so a change made here is on
+/// screen now rather than at the next login, and `pins_apply_live` for
+/// whether it can be told at all. Both ride `raven_shell_v1`, so they live
+/// with the rest of that protocol.
+pub use crate::backend::display::{pins_apply_live, reload_pins};
 
 /// Launcher frecency history, for the Privacy page.
 pub fn frecency_path() -> PathBuf {
@@ -649,6 +695,45 @@ mod tests {
         assert!(out.contains("height = 26"));
         // accent under [table] is untouched; a top-level one is added before it.
         assert!(out.contains("accent = \"#123456\"\n[table]\naccent = \"x\""));
+    }
+
+    #[test]
+    fn a_pins_file_round_trips() {
+        // The Personalization page watches this file and reloads when it
+        // changes, which includes its own writes. It tells one of those from
+        // a real change by comparing what it reads back against what it
+        // holds, so a write that did not read back identically would leave
+        // the card redrawing itself in a loop. Every edge, and the order of
+        // the pins, which is what the bar shows and so is never sorted.
+        let pins = ["/apps/b.desktop".to_string(), "/apps/a.desktop".to_string()];
+        for edge in PIN_POSITIONS {
+            assert_eq!(
+                parse_pins(&pins_text(edge, &pins)),
+                (edge.to_string(), pins.to_vec()),
+                "{edge} did not read back as it was written"
+            );
+        }
+        assert_eq!(
+            parse_pins(&pins_text(PIN_POSITIONS[0], &[])),
+            (PIN_POSITIONS[0].to_string(), Vec::new())
+        );
+    }
+
+    #[test]
+    fn a_file_an_older_release_wrote_still_reads() {
+        // Centre was a fifth position when the bar floated, and orientation
+        // was a second control before the edge decided which way the rail
+        // runs. The compositor forgives both by name; so does this, or the
+        // card would show an edge the screen disagrees with.
+        let (position, pins) =
+            parse_pins("position\tCentre\norientation\tGrid\npin\t/apps/a.desktop\n");
+        assert_eq!(position, PIN_POSITIONS[0]);
+        assert_eq!(pins, ["/apps/a.desktop"]);
+        // An edge that means nothing leaves the default in place rather than
+        // being written through to the compositor.
+        assert_eq!(parse_pins("position\tsideways\n").0, PIN_POSITIONS[0]);
+        // And a file that was never written at all.
+        assert_eq!(parse_pins(""), (PIN_POSITIONS[0].to_string(), Vec::new()));
     }
 
     #[test]

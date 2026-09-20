@@ -108,10 +108,11 @@ impl Default for General {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Personalization {
-    /// Where the pinned-app dock sits: centre, top, bottom, left, right.
-    pub dock_position: String,
-    /// grid, row or column.
-    pub dock_layout: String,
+    // The pinned application bar is deliberately absent. It lives in
+    // `$XDG_STATE_HOME/raven/pins`, which the compositor writes too, and a
+    // copy of the edge here would be a second answer to a question that
+    // already has one — stale the moment the edge was changed from quick
+    // settings. See `backend::integrations::read_pins`.
     /// top or bottom, for RoostBar.
     pub bar_position: String,
 }
@@ -119,8 +120,6 @@ pub struct Personalization {
 impl Default for Personalization {
     fn default() -> Self {
         Self {
-            dock_position: "centre".into(),
-            dock_layout: "grid".into(),
             bar_position: "top".into(),
         }
     }

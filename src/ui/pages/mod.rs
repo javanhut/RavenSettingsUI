@@ -97,8 +97,10 @@ pub fn all() -> Vec<PageInfo> {
             icon: "preferences-desktop-wallpaper-symbolic",
             tint: "purple",
             keywords: &[
-                "dock",
                 "pinned",
+                "pinned application bar",
+                "pin",
+                "dock",
                 "bar",
                 "roostbar",
                 "panel",

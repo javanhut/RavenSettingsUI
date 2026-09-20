@@ -1,5 +1,10 @@
 //! Screens through `raven_output_layout_v1`, the compositor's own extension
 //! (there is no wlr-output-management on Raven), and backlight through sysfs.
+//!
+//! The one request here that is not about screens is [`reload_pins`], which
+//! the Personalization page sends. It rides `raven_shell_manager_v1`, the
+//! same global the screen layout hangs off, and this is where that global is
+//! bound and version-checked.
 
 use std::path::PathBuf;
 
@@ -162,6 +167,14 @@ impl Dispatch<RavenOutputLayoutV1, ()> for State {
     }
 }
 
+/// The newest version of `raven_shell_manager_v1` this build knows. Bound
+/// with `1..=`, so an older compositor simply hands back what it has and the
+/// checks below decide what that version can do.
+const MANAGER_VERSION: u32 = 8;
+
+/// The version that carries `reload_pins`.
+const PINS_RELOAD_VERSION: u32 = 8;
+
 struct Session {
     conn: Connection,
     queue: wayland_client::EventQueue<State>,
@@ -175,9 +188,12 @@ impl Session {
         let conn = Connection::connect_to_env().context("no Wayland display")?;
         let (globals, queue) = registry_queue_init::<State>(&conn)?;
         let qh = queue.handle();
-        let manager: RavenShellManagerV1 = globals.bind(&qh, 1..=7, ()).map_err(|e| {
-            anyhow!("the compositor does not offer raven_shell_manager_v1 ({e}); is this Huginn?")
-        })?;
+        let manager: RavenShellManagerV1 =
+            globals.bind(&qh, 1..=MANAGER_VERSION, ()).map_err(|e| {
+                anyhow!(
+                    "the compositor does not offer raven_shell_manager_v1 ({e}); is this Huginn?"
+                )
+            })?;
         if manager.version() < 3 {
             bail!(
                 "the running compositor speaks raven_shell_v1 version {} and screen arrangement needs version 3. Update RavenGUI (imlazy install) and log in again",
@@ -263,6 +279,57 @@ pub fn apply(changes: &[Change], primary: Option<Option<String>>) -> Result<Vec<
     s.layout.apply();
     s.conn.flush()?;
     s.wait_done()
+}
+
+// ---- the pinned application bar -----------------------------------------
+
+/// Bind the shell manager on its own, without the output layout that
+/// [`Session`] also brings up: the pin requests need nothing else, and
+/// listing every screen to send one request would be a waste.
+///
+/// The queue comes back with the connection because it owns the objects
+/// bound against it; dropped early, the manager would go with it.
+fn manager() -> Result<(
+    Connection,
+    wayland_client::EventQueue<State>,
+    RavenShellManagerV1,
+)> {
+    let conn = Connection::connect_to_env().context("no Wayland display")?;
+    let (globals, queue) = registry_queue_init::<State>(&conn)?;
+    let manager: RavenShellManagerV1 = globals
+        .bind(&queue.handle(), 1..=MANAGER_VERSION, ())
+        .map_err(|e| {
+            anyhow!("the compositor does not offer raven_shell_manager_v1 ({e}); is this Huginn?")
+        })?;
+    Ok((conn, queue, manager))
+}
+
+/// Whether the running compositor can be told to re-read the pins file.
+///
+/// It decides what the Personalization card promises: a change to the pinned
+/// application bar appears as soon as it is made when this is true, and at
+/// the next login when it is not. Asked once, when the page is built.
+pub fn pins_apply_live() -> bool {
+    manager().is_ok_and(|(_, _, m)| m.version() >= PINS_RELOAD_VERSION)
+}
+
+/// Ask the compositor to re-read `$XDG_STATE_HOME/raven/pins` and show what
+/// it says now — which applications are pinned, and which edge the bar
+/// rides.
+///
+/// The file is the only thing the two processes share, so this is sent after
+/// it has been written, never instead.
+pub fn reload_pins() -> Result<()> {
+    let (conn, _queue, manager) = manager()?;
+    if manager.version() < PINS_RELOAD_VERSION {
+        bail!(
+            "the running compositor speaks raven_shell_v1 version {} and cannot reload the pinned application bar. Update RavenGUI (imlazy install) and log in again",
+            manager.version()
+        );
+    }
+    manager.reload_pins();
+    conn.flush()?;
+    Ok(())
 }
 
 // ---- backlight ---------------------------------------------------------
