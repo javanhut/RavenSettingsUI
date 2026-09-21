@@ -5,6 +5,11 @@
 //! Everything goes through `ravend` (see `backend::fingerprint`), which only
 //! ever answers about the account running this window. Adding a finger and
 //! switching a use on ask for your password; ravend checks it, not this page.
+//!
+//! Face unlock is the other half of this page and lives in
+//! [`crate::ui::pages::face`]. Two modules rather than one, because the camera
+//! and the reader are separate devices: they are asked about separately, they
+//! fail separately, and one being busy must not grey the other out.
 
 use std::cell::{Cell, RefCell};
 use std::os::unix::net::UnixStream;
@@ -58,7 +63,7 @@ fn fingerprint_icon() -> gtk::Image {
 pub fn build(app: &Rc<App>) -> gtk::Widget {
     let (root, content) = widgets::page(
         "Security",
-        "How you prove it's you: your fingerprint, and where it can stand in for your password.",
+        "How you prove it's you: your fingerprint and your face, and where each can stand in for your password.",
     );
 
     // --- the reader and your fingers -----------------------------------------
@@ -194,6 +199,11 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     on_switch(app, &page, &page.login, |p| &mut p.login);
     on_switch(app, &page, &page.unlock, |p| &mut p.unlock);
     on_switch(app, &page, &page.sudo, |p| &mut p.sudo);
+
+    // Face unlock, below the reader. Its own module and its own state: the
+    // camera and the reader are separate devices that fail for unrelated
+    // reasons, and a camera that is busy must not grey out the reader.
+    content.append(&crate::ui::pages::face::section(app));
 
     // Looked at again whenever the page is shown: a reader plugged in, or a
     // terminal command that finished, since it was last on screen.

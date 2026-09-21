@@ -1,6 +1,7 @@
 pub mod apps;
 pub mod bluetooth;
 pub mod display;
+pub mod face;
 pub mod fingerprint;
 pub mod integrations;
 pub mod keycast;

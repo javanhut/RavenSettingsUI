@@ -11,6 +11,7 @@ pub mod appearance;
 pub mod bluetooth;
 pub mod datetime;
 pub mod display;
+pub mod face;
 pub mod general;
 pub mod keycast;
 pub mod network;
