@@ -89,6 +89,9 @@ pub struct General {
     pub terminal: String,
     /// Minutes of idle before the screen locks; 0 = never.
     pub lock_after_minutes: u32,
+    /// While locked, turn the screens off: 0 = immediately, negative = never,
+    /// otherwise after this many seconds without input.
+    pub lock_screen_off_seconds: i64,
     /// 24-hour clock in the bar.
     pub clock_24h: bool,
     pub show_date: bool,
@@ -99,6 +102,7 @@ impl Default for General {
         Self {
             terminal: "raven-terminal".into(),
             lock_after_minutes: 10,
+            lock_screen_off_seconds: 0,
             clock_24h: true,
             show_date: true,
         }

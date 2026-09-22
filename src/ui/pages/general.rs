@@ -19,6 +19,14 @@ const IDLE: [(&str, u32); 6] = [
     ("1 hour", 60),
 ];
 
+const SCREEN_OFF: [(&str, i64); 5] = [
+    ("Immediately", 0),
+    ("After 10 seconds", 10),
+    ("After 30 seconds", 30),
+    ("After 1 minute", 60),
+    ("Never", -1),
+];
+
 const POWER_CHOICES: [(&str, &str); 4] = [
     ("Sleep", "suspend"),
     ("Power off", "poweroff"),
@@ -111,6 +119,32 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         });
     }
     list.append(&idle);
+
+    let screen_off = adw::ComboRow::builder()
+        .title("Turn off the screen when locked")
+        .subtitle("Any key or touch wakes it to the lock screen")
+        .model(&gtk::StringList::new(&SCREEN_OFF.map(|i| i.0)))
+        .build();
+    {
+        let s = app.config.borrow().general.lock_screen_off_seconds;
+        // A value set by hand that is not one of the choices shows as the
+        // nearest thing it means: negative is never, anything else a delay.
+        let shown = SCREEN_OFF
+            .iter()
+            .position(|i| i.1 == s)
+            .unwrap_or(if s < 0 { SCREEN_OFF.len() - 1 } else { 1 });
+        screen_off.set_selected(shown as u32);
+        let app = app.clone();
+        screen_off.connect_selected_notify(move |r| {
+            let s = SCREEN_OFF[r.selected() as usize].1;
+            if app.config.borrow().general.lock_screen_off_seconds == s {
+                return;
+            }
+            app.config.borrow_mut().general.lock_screen_off_seconds = s;
+            app.save();
+        });
+    }
+    list.append(&screen_off);
 
     let lang = adw::ActionRow::builder()
         .title("Language and region")
