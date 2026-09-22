@@ -20,6 +20,7 @@ pub mod notifications;
 pub mod personalization;
 pub mod privacy;
 pub mod security;
+pub mod services;
 pub mod sound;
 pub mod storage;
 pub mod updates;
@@ -253,6 +254,35 @@ pub fn all() -> Vec<PageInfo> {
                 "huginn-keyring",
             ],
             build: security::build,
+        },
+        PageInfo {
+            id: "services",
+            title: "Services",
+            icon: "system-run-symbolic",
+            tint: "teal",
+            keywords: &[
+                "service",
+                "services",
+                "daemon",
+                "daemons",
+                "background",
+                "start",
+                "stop",
+                "enable",
+                "disable",
+                "fingerprint",
+                "face",
+                "bluetooth",
+                "printing",
+                "printer",
+                "cups",
+                "ssh",
+                "remote",
+                "firmware",
+                "init",
+                "raven-rc",
+            ],
+            build: services::build,
         },
         PageInfo {
             id: "updates",

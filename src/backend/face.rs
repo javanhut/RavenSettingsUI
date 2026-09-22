@@ -108,8 +108,13 @@ impl Camera {
     pub fn why_not(&self) -> Option<String> {
         match self {
             Self::Present { .. } => None,
+            // There is a button beside this sentence now (see
+            // `ui::pages::face`), so it says what pressing it will do rather
+            // than stating a fact and stopping. Before `backend::services`
+            // existed the only way on was `sudo raven-rc` in a terminal, and
+            // this sentence was the end of the road.
             Self::NoService => {
-                Some("The face unlock service is not running on this machine.".into())
+                Some("The face unlock service is not running. Turn it on to use your face.".into())
             }
             Self::Absent => Some("This machine has no camera.".into()),
             Self::NoModel { .. } => Some(

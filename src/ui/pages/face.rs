@@ -26,10 +26,18 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::backend::face::{self as fc, Camera, Enrolled, Outcome, Policy, Status, MAX_LOOKS};
+use crate::backend::services as sv;
 use crate::ui::{confirm, spawn, widgets, App};
+
+/// The service raven-init runs for face unlock. `backend::services` turns it
+/// on; this page never says the word `sudo`.
+const SERVICE: &str = "faced";
 
 struct Page {
     camera_row: adw::ActionRow,
+    /// Shown only when the camera is fine and the daemon that drives it is
+    /// not running. See [`apply`].
+    turn_on: gtk::Button,
     looks: gtk::ListBox,
     add: gtk::Button,
     login: adw::SwitchRow,
@@ -71,6 +79,14 @@ pub fn section(app: &Rc<App>) -> gtk::Widget {
         .subtitle("Checking…")
         .build();
     camera_row.add_prefix(&face_icon());
+    // The way out of the one state this section used to be a dead end in.
+    // Hidden unless `apply` finds that state, so a machine where face unlock
+    // simply works never shows a button offering to start something.
+    let turn_on = gtk::Button::with_label("Turn On");
+    turn_on.add_css_class("suggested-action");
+    turn_on.set_valign(gtk::Align::Center);
+    turn_on.set_visible(false);
+    camera_row.add_suffix(&turn_on);
     let recheck = gtk::Button::from_icon_name("view-refresh-symbolic");
     recheck.add_css_class("flat");
     recheck.set_valign(gtk::Align::Center);
@@ -126,6 +142,7 @@ pub fn section(app: &Rc<App>) -> gtk::Widget {
 
     let page = Rc::new(Page {
         camera_row,
+        turn_on,
         looks,
         add,
         login,
@@ -145,6 +162,11 @@ pub fn section(app: &Rc<App>) -> gtk::Widget {
     {
         let (app, page2) = (app.clone(), page.clone());
         page.add.connect_clicked(move |_| add_face(&app, &page2));
+    }
+    {
+        let (app, page2) = (app.clone(), page.clone());
+        page.turn_on
+            .connect_clicked(move |_| start_service(&app, &page2));
     }
     on_switch(app, &page, &page.login, |p| &mut p.login);
     on_switch(app, &page, &page.unlock, |p| &mut p.unlock);
@@ -214,6 +236,44 @@ fn retry_later(app: &Rc<App>, page: &Rc<Page>) {
     });
 }
 
+/// Start the face unlock daemon, and say what happened.
+///
+/// This is the whole of what used to be `sudo raven-rc reload` followed by
+/// `sudo raven-rc start faced`, typed in a terminal by somebody who had to
+/// work out that those were the two commands. `backend::services` hands it to
+/// rvnd, which is root, checks the group, and asks for the password itself if
+/// the machine's policy says to -- so nothing here needs privilege and
+/// nothing here opens a terminal.
+///
+/// It can take a few seconds: `raven-faced` optimises two ONNX graphs before
+/// it binds its socket, which is why raven-init gives it a 30-second
+/// readiness timeout. The button says so rather than appearing to do nothing.
+fn start_service(app: &Rc<App>, page: &Rc<Page>) {
+    page.turn_on.set_sensitive(false);
+    page.turn_on.set_label("Turning On…");
+
+    let (app, page) = (app.clone(), page.clone());
+    spawn(
+        || sv::enable(SERVICE),
+        move |result| {
+            match result {
+                Ok(()) => {
+                    app.toast("Face unlock is on");
+                    // What the daemon now says about the camera is a fresh
+                    // question, and the answer draws the rest of the section:
+                    // the faces, the switches, and whether Add is offered.
+                    refresh(&app, &page);
+                }
+                Err(e) => {
+                    page.turn_on.set_sensitive(true);
+                    page.turn_on.set_label("Turn On");
+                    app.error("Could not turn face unlock on", &e);
+                }
+            }
+        },
+    );
+}
+
 /// Draw the section from what ravend said.
 fn apply(app: &Rc<App>, page: &Rc<Page>, status: Status) {
     let present = status.camera.is_present();
@@ -229,6 +289,18 @@ fn apply(app: &Rc<App>, page: &Rc<Page>, status: Status) {
             .unwrap_or_else(|| "Not available.".to_string()),
     };
     page.camera_row.set_subtitle(&subtitle);
+
+    // `NoService` is the only state with a button. The others are a camera
+    // this machine does not have and models that are not installed, and
+    // neither is fixed by starting anything. `defined` is asked as well
+    // because a machine that never installed raven-faced has no service to
+    // start either -- for that one the sentence above is the whole answer.
+    let startable = matches!(status.camera, Camera::NoService) && sv::installed(SERVICE);
+    page.turn_on.set_visible(startable);
+    if startable {
+        page.turn_on.set_sensitive(true);
+        page.turn_on.set_label("Turn On");
+    }
 
     // Your faces.
     widgets::clear(&page.looks);

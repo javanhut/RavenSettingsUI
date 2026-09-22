@@ -22,7 +22,11 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::backend::fingerprint::{self as fp, Enrolled, Finger, Outcome, Policy, Reader, Status};
+use crate::backend::services as sv;
 use crate::ui::{ask_text, confirm, offer_terminal, spawn, widgets, App};
+
+/// The service raven-init runs for the fingerprint reader.
+const SERVICE: &str = "fprintd";
 
 struct Page {
     reader_row: adw::ActionRow,
@@ -168,24 +172,8 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     }
     {
         let (app, page2) = (app.clone(), page.clone());
-        page.reader_action.connect_clicked(move |_| {
-            let cmd: Vec<String> = ["sudo", "raven-rc", "start", "fprintd"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-            let (app2, page3) = (app.clone(), page2.clone());
-            offer_terminal(
-                &app,
-                "Start the fingerprint service?",
-                "raven-fprintd is the system service that talks to the reader. It runs as root, so it is started with raven-rc.",
-                &cmd,
-                move |ran| {
-                    if ran {
-                        refresh_later(&app2, &page3);
-                    }
-                },
-            );
-        });
+        page.reader_action
+            .connect_clicked(move |_| start_service(&app, &page2));
     }
     {
         let (app, page2) = (app.clone(), page.clone());
@@ -298,18 +286,57 @@ fn refresh_later(app: &Rc<App>, page: &Rc<Page>) {
     });
 }
 
+/// Start the fingerprint daemon.
+///
+/// This button used to open a dialog offering to run `sudo raven-rc start
+/// fprintd` in a terminal, because there was no daemon on this machine that
+/// would start a service for an unprivileged caller and
+/// `backend::terminal`'s rule is that a GUI never runs sudo itself. rvnd now
+/// grants that verb -- see `backend::services` -- so the button does the
+/// thing it is named after.
+///
+/// `enable` rather than `start`: somebody turning their fingerprint reader on
+/// in a settings window means it, and a reader that worked until the next
+/// reboot would be a bug report. It also covers the machine whose drop-in
+/// raven-init has never read, which `start` alone cannot.
+fn start_service(app: &Rc<App>, page: &Rc<Page>) {
+    page.reader_action.set_sensitive(false);
+    page.reader_action.set_label("Starting…");
+
+    let (app, page) = (app.clone(), page.clone());
+    spawn(
+        || sv::enable(SERVICE),
+        move |result| {
+            page.reader_action.set_sensitive(true);
+            page.reader_action.set_label("Start");
+            match result {
+                Ok(()) => {
+                    app.toast("The fingerprint service is running");
+                    refresh(&app, &page);
+                }
+                Err(e) => app.error("Could not start the fingerprint service", &e),
+            }
+        },
+    );
+}
+
 /// Draw the page from what ravend said.
 fn apply(app: &Rc<App>, page: &Rc<Page>, status: Status) {
     let present = matches!(status.reader, Reader::Present { .. });
     let subtitle = match &status.reader {
-        Reader::NoService => "The fingerprint service is not running.".to_string(),
+        Reader::NoService => {
+            "The fingerprint service is not running. Start it to use the reader.".to_string()
+        }
         Reader::Absent => "No fingerprint reader was found on this computer.".to_string(),
         Reader::Present { firmware, .. } if firmware.is_empty() => "Ready.".to_string(),
         Reader::Present { firmware, .. } => format!("Ready. Firmware {firmware}."),
     };
     page.reader_row.set_subtitle(&subtitle);
+    // Only when there is a service to start. A machine that never installed
+    // raven-fprintd has no definition for one, and the sentence above is the
+    // whole of the answer there.
     page.reader_action
-        .set_visible(status.reader == Reader::NoService);
+        .set_visible(status.reader == Reader::NoService && sv::installed(SERVICE));
 
     // Your fingers.
     widgets::clear(&page.fingers);

@@ -19,10 +19,17 @@ use libadwaita::prelude::*;
 use crate::backend::bluetooth::{
     self as bt, Answer, Availability, Bluetooth, Device, Prompt, Reply, Snapshot,
 };
+use crate::backend::services as sv;
 use crate::ui::{ask_text, confirm, main_window, spawn, widgets, App};
 
 /// How long one scan runs before it stops on its own.
 const SCAN_FOR: Duration = Duration::from_secs(60);
+
+/// The service raven-init runs for Bluetooth.
+const SERVICE: &str = "bluetoothd";
+
+/// The package that provides it, for the machine that has no BlueZ at all.
+const PACKAGE: &str = "bluez";
 
 struct Page {
     banner: adw::Banner,
@@ -85,7 +92,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     content.append(&nearby_card);
 
     let page = Rc::new(Page {
-        banner,
+        banner: banner.clone(),
         power,
         discoverable,
         adapter_name,
@@ -98,6 +105,15 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
         busy: Cell::new(false),
         syncing: Cell::new(false),
     });
+
+    // The banner's button. Connected once, here, rather than each time the
+    // banner is drawn -- `show` runs on every refresh, and a handler
+    // connected there would be connected again on each one. It is only ever
+    // visible for the one state it acts on; see `show`.
+    {
+        let (app2, page2) = (app.clone(), page.clone());
+        banner.connect_button_clicked(move |_| start_service(&app2, &page2));
+    }
 
     {
         let app = app.clone();
@@ -238,7 +254,37 @@ fn refresh(app: &Rc<App>, page: &Rc<Page>) {
             Err(e) => {
                 page.banner
                     .set_title(&format!("Bluetooth is unavailable: {e}"));
+                page.banner.set_button_label(None);
                 page.banner.set_revealed(true);
+            }
+        },
+    );
+}
+
+/// Start the Bluetooth service, from the banner's button.
+///
+/// `backend::services` hands this to rvnd, which is root and asks the human
+/// itself if the policy says to. Nothing here runs sudo and nothing here
+/// opens a terminal -- see `backend::terminal` for why a GUI must not, and
+/// `backend::services` for what changed that made this possible.
+fn start_service(app: &Rc<App>, page: &Rc<Page>) {
+    page.banner.set_button_label(None);
+    page.banner.set_title("Starting the Bluetooth service…");
+
+    let (app, page) = (app.clone(), page.clone());
+    spawn(
+        || sv::enable(SERVICE),
+        move |result| match result {
+            Ok(()) => {
+                app.toast("Bluetooth is on");
+                // bluetoothd binds its bus name a moment after it starts, so
+                // what the page draws now is a fresh look rather than an
+                // assumption that it worked.
+                refresh(&app, &page);
+            }
+            Err(e) => {
+                app.error("Could not start the Bluetooth service", &e);
+                refresh(&app, &page);
             }
         },
     );
@@ -247,13 +293,36 @@ fn refresh(app: &Rc<App>, page: &Rc<Page>) {
 fn show(app: &Rc<App>, page: &Rc<Page>, avail: Availability, snap: Snapshot) {
     match avail {
         Availability::NoDaemon => {
-            page.banner.set_title("bluetoothd is not running. Install BlueZ (sudo rvn install -y bluez), copy /usr/share/raven/services/bluetoothd.toml to /etc/raven/init.d/, then: sudo raven-rc reload && sudo raven-rc start bluetoothd");
+            // Two different machines land here and they need different
+            // sentences. One has BlueZ installed and a service raven-init is
+            // not running, which is a button. The other has no BlueZ at all,
+            // which is a package -- and offering to start a daemon that is
+            // not on disk would fail with an error about a missing binary
+            // rather than saying what is actually missing.
+            //
+            // This banner used to carry the same three sudo commands in
+            // either case, chained with `&&`, for somebody to retype.
+            if sv::installed(SERVICE) {
+                page.banner
+                    .set_title("Bluetooth is off because its system service is not running.");
+                page.banner.set_button_label(Some("Turn On"));
+            } else {
+                page.banner.set_title(&format!(
+                    "Bluetooth needs BlueZ, which is not installed. Install {PACKAGE}                      from Raven Store, and this page will be able to turn it on."
+                ));
+                page.banner.set_button_label(None);
+            }
             page.banner.set_revealed(true);
             return;
         }
         Availability::NoAdapter => {
             page.banner
                 .set_title("No Bluetooth adapter was found on this machine.");
+            // Nothing to press: an adapter is not a thing a button can
+            // produce. The label is cleared rather than left as whatever the
+            // last banner set, which would offer to start a service that is
+            // already running.
+            page.banner.set_button_label(None);
             page.banner.set_revealed(true);
             return;
         }

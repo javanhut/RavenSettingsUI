@@ -7,6 +7,7 @@ pub mod integrations;
 pub mod keycast;
 pub mod keyring;
 pub mod network;
+pub mod services;
 pub mod sound;
 pub mod storage;
 pub mod system;
