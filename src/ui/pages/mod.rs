@@ -14,6 +14,7 @@ pub mod display;
 pub mod face;
 pub mod general;
 pub mod keycast;
+pub mod keyring;
 pub mod network;
 pub mod notifications;
 pub mod personalization;
@@ -245,6 +246,11 @@ pub fn all() -> Vec<PageInfo> {
                 "sudo",
                 "password",
                 "authentication",
+                "keyring",
+                "secrets",
+                "vault",
+                "pam",
+                "huginn-keyring",
             ],
             build: security::build,
         },

@@ -205,6 +205,13 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     // reasons, and a camera that is busy must not grey out the reader.
     content.append(&crate::ui::pages::face::section(app));
 
+    // The login keyring, below both: not a way to log in, but the other side
+    // of the question this page asks, so it belongs where somebody is already
+    // looking rather than off on its own. Its own module and its own state
+    // for the same reason face's is -- see keyring::section's own comment for
+    // why it needs so much less of both.
+    content.append(&crate::ui::pages::keyring::section(app));
+
     // Looked at again whenever the page is shown: a reader plugged in, or a
     // terminal command that finished, since it was last on screen.
     {

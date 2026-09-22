@@ -5,6 +5,7 @@ pub mod face;
 pub mod fingerprint;
 pub mod integrations;
 pub mod keycast;
+pub mod keyring;
 pub mod network;
 pub mod sound;
 pub mod storage;
