@@ -7,7 +7,7 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 
 use crate::backend::integrations;
-use crate::config::{AnimationSpeed, ThemeMode, ACCENTS};
+use crate::config::{AnimationSpeed, ThemeMode, ACCENTS, GLASS_THEMES, LAUNCHER_LAYOUTS};
 use crate::ui::{spawn, widgets, App};
 
 pub fn build(app: &Rc<App>) -> gtk::Widget {
@@ -18,7 +18,7 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
     let (row, left, right) = widgets::two_columns();
     content.append(&row);
     let note = widgets::dim_label(
-        "Saved to ~/.config/raven/desktop.toml and applied to RoostBar and GTK apps right away. The compositor picks them up once it reads that file.",
+        "Saved to ~/.config/raven/desktop.toml and applied to RoostBar and GTK apps right away. The desktop's glass and launcher change as soon as the file is saved.",
     );
     note.add_css_class("note");
     content.append(&note);
@@ -28,10 +28,12 @@ pub fn build(app: &Rc<App>) -> gtk::Widget {
 
     left.append(&theme_card(app, &preview));
     left.append(&accent_card(app, &preview));
+    left.append(&glass_card(app, &preview));
     left.append(&scale_card(app));
     left.append(&transparency_card(app));
 
     right.append(&preview.card);
+    right.append(&launcher_card(app));
     right.append(&animation_card(app));
     right.append(&wallpaper_card(app, &preview));
     right.append(&effects_card(app));
@@ -92,6 +94,15 @@ impl Preview {
 
     fn refresh(&self, app: &Rc<App>) {
         let cfg = app.config.borrow();
+        // The window wears the desktop's glass, so picking one shows it.
+        for (_, value, _) in GLASS_THEMES {
+            let class = format!("glass-{value}");
+            if cfg.appearance.glass_theme == value {
+                self.window.add_css_class(&class);
+            } else {
+                self.window.remove_css_class(&class);
+            }
+        }
         if matches!(cfg.appearance.theme_mode, ThemeMode::Light) {
             self.window.add_css_class("light");
         } else {
@@ -183,6 +194,73 @@ fn accent_card(app: &Rc<App>, preview: &Rc<Preview>) -> gtk::Box {
         row.append(&b);
     }
     body.append(&row);
+    card
+}
+
+/// The glass the desktop's own panels are made of: the launcher, the dock,
+/// quick settings, notifications. A swatch of each, tinted as it is drawn.
+fn glass_card(app: &Rc<App>, preview: &Rc<Preview>) -> gtk::Box {
+    let (card, body) = widgets::card("Glass theme", "The tint of the launcher, dock and panels");
+    let row = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .homogeneous(true)
+        .min_children_per_line(3)
+        .max_children_per_line(5)
+        .column_spacing(10)
+        .row_spacing(10)
+        .build();
+    let current = app.config.borrow().appearance.glass_theme.clone();
+    let mut first: Option<gtk::ToggleButton> = None;
+    for (label, value, description) in GLASS_THEMES {
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let swatch = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        swatch.add_css_class("glass-swatch");
+        swatch.add_css_class(&format!("glass-{value}"));
+        content.append(&swatch);
+        let name = gtk::Label::new(Some(label));
+        content.append(&name);
+        let b = gtk::ToggleButton::builder().child(&content).build();
+        b.add_css_class("theme-choice");
+        b.set_tooltip_text(Some(description));
+        if let Some(f) = &first {
+            b.set_group(Some(f));
+        } else {
+            first = Some(b.clone());
+        }
+        b.set_active(value == current);
+        let app = app.clone();
+        let preview = preview.clone();
+        b.connect_toggled(move |b| {
+            if !b.is_active() || app.config.borrow().appearance.glass_theme == value {
+                return;
+            }
+            app.config.borrow_mut().appearance.glass_theme = value.to_owned();
+            app.save();
+            preview.refresh(&app);
+        });
+        row.append(&b);
+    }
+    body.append(&row);
+    card
+}
+
+/// How the launcher is laid out: the grid, or the arc.
+fn launcher_card(app: &Rc<App>) -> gtk::Box {
+    let (card, body) = widgets::card("Launcher layout", "How the app launcher is arranged");
+    let current = LAUNCHER_LAYOUTS
+        .iter()
+        .position(|(_, value)| *value == app.config.borrow().appearance.launcher_layout)
+        .unwrap_or(0);
+    let labels: Vec<&str> = LAUNCHER_LAYOUTS.iter().map(|(label, _)| *label).collect();
+    let app = app.clone();
+    body.append(&widgets::segmented(&labels, current, move |i| {
+        let value = LAUNCHER_LAYOUTS[i].1;
+        if app.config.borrow().appearance.launcher_layout == value {
+            return;
+        }
+        app.config.borrow_mut().appearance.launcher_layout = value.to_owned();
+        app.save();
+    }));
     card
 }
 

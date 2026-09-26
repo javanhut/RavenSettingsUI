@@ -26,6 +26,22 @@ pub const ACCENTS: [(&str, &str); 7] = [
     ("Violet", "#B279F7"),
 ];
 
+/// The glass the compositor draws its panels in — the launcher, the dock,
+/// quick settings, notifications, title bars — as (label, value written to
+/// `appearance.glass_theme`, a word of description). Huginn's
+/// `theme::Theme` reads the values; the first is its default.
+pub const GLASS_THEMES: [(&str, &str, &str); 5] = [
+    ("Black Glass", "black", "Smoked, near-black"),
+    ("Fog Glass", "fog", "Soft blue-grey frost"),
+    ("Arctic Glass", "arctic", "Pale, icy blue"),
+    ("Midnight Glass", "midnight", "Deep navy"),
+    ("Rose Glass", "rose", "Dusky rose"),
+];
+
+/// The launcher layouts Huginn draws, as (label, value written to
+/// `appearance.launcher_layout`). The first is its default.
+pub const LAUNCHER_LAYOUTS: [(&str, &str); 2] = [("Grid", "list"), ("Arc", "arc")];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeMode {
@@ -64,6 +80,16 @@ pub struct Appearance {
     /// Huginn, which reads this field when the daemon is not running, draws
     /// stills only.
     pub wallpaper: String,
+    /// One of the values in [`GLASS_THEMES`].
+    pub glass_theme: String,
+    /// One of the values in [`LAUNCHER_LAYOUTS`].
+    pub launcher_layout: String,
+    /// Keys this build does not know, kept so that saving does not delete
+    /// them. The compositor grows keys of its own in this section; a
+    /// Settings that rewrote the file from only the fields it knows would
+    /// quietly undo every one of them the next time anything was changed.
+    #[serde(flatten)]
+    pub other: toml::Table,
 }
 
 impl Default for Appearance {
@@ -78,6 +104,9 @@ impl Default for Appearance {
             smooth_animations: true,
             animation_speed: AnimationSpeed::Normal,
             wallpaper: String::new(),
+            glass_theme: GLASS_THEMES[0].1.into(),
+            launcher_layout: LAUNCHER_LAYOUTS[0].1.into(),
+            other: toml::Table::new(),
         }
     }
 }
@@ -310,6 +339,33 @@ mod tests {
         let absent: DesktopConfig = toml::from_str("[appearance]\n").unwrap();
         assert!(!absent.notifications.do_not_disturb);
         assert_eq!(absent.notifications.timeout_seconds, 6);
+    }
+
+    #[test]
+    fn the_glass_theme_and_launcher_layout_are_written_and_read_back() {
+        let mut cfg = DesktopConfig::default();
+        cfg.appearance.glass_theme = "fog".into();
+        cfg.appearance.launcher_layout = "arc".into();
+        let text = toml::to_string(&cfg).unwrap();
+        let back: DesktopConfig = toml::from_str(&text).unwrap();
+        assert_eq!(back.appearance.glass_theme, "fog");
+        assert_eq!(back.appearance.launcher_layout, "arc");
+        let absent: DesktopConfig = toml::from_str("[appearance]\n").unwrap();
+        assert_eq!(absent.appearance.glass_theme, "black");
+        assert_eq!(absent.appearance.launcher_layout, "list");
+    }
+
+    #[test]
+    fn keys_this_build_does_not_know_survive_a_save() {
+        let cfg: DesktopConfig = toml::from_str(
+            "[appearance]\naccent = \"#000000\"\nsomething_new = 3\n\n[general]\nterminal = \"kitty\"\n",
+        )
+        .unwrap();
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        assert!(text.contains("something_new = 3"), "dropped: {text}");
+        let back: DesktopConfig = toml::from_str(&text).unwrap();
+        assert_eq!(back.appearance.accent, "#000000");
+        assert_eq!(back.general.terminal, "kitty");
     }
 
     #[test]

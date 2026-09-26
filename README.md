@@ -60,6 +60,8 @@ blur = true
 smooth_animations = true
 animation_speed = "normal"   # slow | normal | fast
 wallpaper = ""               # a still, under ~/.local/share/raven/wallpaper/ (first frame of a live one)
+glass_theme = "black"        # black | fog | arctic | midnight | rose — Huginn's panels
+launcher_layout = "list"     # list (the grid) | arc
 
 [general]
 terminal = "raven-terminal"
@@ -87,8 +89,12 @@ On every save the app also:
 
 - **Huginn** (RavenGUI) loads it at start and reloads on change
   (`huginn-comp/src/desktop_config.rs` + `configwatch.rs`): accent,
-  `smooth_animations` → reduced motion, `lock_after_minutes`, `terminal`, and
-  `wallpaper` as its own background when `ravencanvasd` is not running.
+  `smooth_animations` → reduced motion, `lock_after_minutes`, `terminal`,
+  `glass_theme` (the tint of the launcher, dock and panels),
+  `launcher_layout`, and `wallpaper` as its own background when
+  `ravencanvasd` is not running. Keys in `[appearance]` this app does not
+  know are kept when it saves, so a key the compositor adds first is not
+  lost the next time anything is changed here.
   Quick settings has an "All settings" row that opens this app, and
   `Super+Ctrl+P` does the same.
 - **RavenCanvas** gets the wallpaper directly: the Appearance page runs

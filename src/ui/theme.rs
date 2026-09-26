@@ -69,6 +69,23 @@ pub const BASE_CSS: &str = concat!(
 }
 .preview-window .pv-row.active { background-color: @accent_bg_color; }
 .preview-window .pv-side { min-width: 44px; }
+.glass-swatch {
+  min-height: 34px;
+  border-radius: 9px;
+  border: 1px solid alpha(#ffffff, 0.22);
+  box-shadow: inset 0 1px 0 alpha(#ffffff, 0.35);
+}
+/* The compositor's palettes (Huginn's theme.rs): ground and alpha. */
+.glass-black { background-color: alpha(#16161f, 0.85); }
+.glass-fog { background-color: alpha(#6e7d94, 0.80); }
+.glass-arctic { background-color: alpha(#4f7f9f, 0.80); }
+.glass-midnight { background-color: alpha(#0e1630, 0.85); }
+.glass-rose { background-color: alpha(#5a3a4e, 0.82); }
+.preview-window.glass-black { background-color: alpha(#16161f, 0.85); }
+.preview-window.glass-fog { background-color: alpha(#6e7d94, 0.72); color: #ffffff; }
+.preview-window.glass-arctic { background-color: alpha(#4f7f9f, 0.72); color: #ffffff; }
+.preview-window.glass-midnight { background-color: alpha(#0e1630, 0.85); color: #e8eeff; }
+.preview-window.glass-rose { background-color: alpha(#5a3a4e, 0.78); color: #fff4f8; }
 .signal-bars { font-family: monospace; }
 .wallpaper-thumb { border-radius: 10px; }
 "#
