@@ -151,6 +151,65 @@ pub fn apply(mode: ThemeMode, accent: &str, glass: bool) {
     });
 }
 
+thread_local! {
+    /// Kept alive for as long as the app runs; dropping it stops the watch.
+    static DESKTOP_MONITOR: std::cell::RefCell<Option<gtk::gio::FileMonitor>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// How long `desktop.toml` has to stay quiet before it is read again: one
+/// save arrives as a burst of events.
+const DESKTOP_SETTLE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Restyle when `desktop.toml` changes underneath this window -- another
+/// Settings window, or a hand edit. Only the look follows; the pages keep
+/// what they loaded. This window's own saves come back through here too,
+/// which is harmless: [`apply`] replaces its provider rather than adding one.
+pub fn watch_desktop() {
+    use gtk::{gio, glib};
+    use std::{cell::RefCell, rc::Rc};
+
+    let path = crate::config::path();
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return;
+    };
+    let name = name.to_os_string();
+    let Ok(monitor) = gio::File::for_path(dir)
+        .monitor_directory(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE)
+    else {
+        return;
+    };
+    let pending: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    monitor.connect_changed(move |_, file, other, event| {
+        if matches!(
+            event,
+            gio::FileMonitorEvent::AttributeChanged
+                | gio::FileMonitorEvent::PreUnmount
+                | gio::FileMonitorEvent::Unmounted
+        ) {
+            return;
+        }
+        let names_desktop = |f: Option<&gio::File>| {
+            f.and_then(|f| f.basename())
+                .is_some_and(|b| b.as_os_str() == name.as_os_str())
+        };
+        if !names_desktop(Some(file)) && !names_desktop(other) {
+            return;
+        }
+        if let Some(id) = pending.borrow_mut().take() {
+            id.remove();
+        }
+        let fired = pending.clone();
+        let id = glib::timeout_add_local_once(DESKTOP_SETTLE, move || {
+            fired.borrow_mut().take();
+            let a = crate::config::DesktopConfig::load().appearance;
+            apply(a.theme_mode, &a.accent, a.transparency);
+        });
+        *pending.borrow_mut() = Some(id);
+    });
+    DESKTOP_MONITOR.with(|m| *m.borrow_mut() = Some(monitor));
+}
+
 pub fn is_hex(s: &str) -> bool {
     s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
 }

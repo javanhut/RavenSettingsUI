@@ -1,9 +1,11 @@
-//! Pushing desktop.toml choices out to the components that can act on them
-//! today: RoostBar's config, GTK's colour scheme, and the wallpaper store.
+//! Pushing desktop.toml choices out to the components that do not read it
+//! themselves: RoostBar's config, GTK's colour scheme and accent, the
+//! wallpaper store and the pinned-app bar.
 //!
-//! Huginn (the compositor) has no configuration surface yet, so its share of
-//! these — accent, blur, shadows, animations — is recorded in desktop.toml
-//! and waits for the compositor to read it. See README "Compositor hook".
+//! Huginn (the compositor) reads desktop.toml directly and watches it, so its
+//! share -- accent, blur, glass theme, animations, the dock -- needs nothing
+//! from here beyond the atomic write (see huginn-comp's `desktop_config.rs`
+//! and `configwatch.rs` in RavenGUI). The Raven apps do the same.
 
 use std::path::{Path, PathBuf};
 
@@ -203,22 +205,90 @@ pub fn restart_roostbar() -> Result<()> {
     Ok(())
 }
 
-/// GTK apps (this one included, RavenFileManager, portals) follow
-/// `org.gnome.desktop.interface color-scheme`; and GTK 3 apps read
-/// settings.ini. Set both so nothing is left out.
-pub fn sync_gtk(cfg: &DesktopConfig) -> Result<()> {
-    let scheme = match cfg.appearance.theme_mode {
-        ThemeMode::Dark => "prefer-dark",
-        ThemeMode::Light => "prefer-light",
-        ThemeMode::Auto => "default",
+/// libadwaita's named accents (`org.gnome.desktop.interface accent-color`)
+/// and the colour each one stands for.
+const ADW_ACCENTS: [(&str, [u8; 3]); 9] = [
+    ("blue", [0x35, 0x84, 0xe4]),
+    ("teal", [0x21, 0x90, 0xa4]),
+    ("green", [0x3a, 0x94, 0x4a]),
+    ("yellow", [0xc8, 0x88, 0x00]),
+    ("orange", [0xed, 0x5b, 0x00]),
+    ("red", [0xe6, 0x2d, 0x42]),
+    ("pink", [0xd5, 0x61, 0x99]),
+    ("purple", [0x91, 0x41, 0xac]),
+    ("slate", [0x6f, 0x83, 0x96]),
+];
+
+/// The libadwaita accent name nearest to `#RRGGBB`, for apps that only
+/// know the nine named ones. Matched by hue, since a hue is what the names
+/// name; a colour too grey to have one is slate. Anything that is not a hex
+/// colour is Raven's default, which is blue.
+pub fn adw_accent_name(hex: &str) -> &'static str {
+    fn hue_and_saturation([r, g, b]: [u8; 3]) -> (f64, f64) {
+        let (r, g, b) = (r as f64, g as f64, b as f64);
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let d = max - min;
+        if d == 0.0 {
+            return (0.0, 0.0);
+        }
+        let h = if max == r {
+            60.0 * ((g - b) / d)
+        } else if max == g {
+            60.0 * ((b - r) / d) + 120.0
+        } else {
+            60.0 * ((r - g) / d) + 240.0
+        };
+        (h.rem_euclid(360.0), d / max)
+    }
+    let byte = |s: &str| u8::from_str_radix(s, 16).ok();
+    let parsed = (hex.len() == 7 && hex.starts_with('#'))
+        .then(|| Some([byte(&hex[1..3])?, byte(&hex[3..5])?, byte(&hex[5..7])?]))
+        .flatten();
+    let Some(rgb) = parsed else {
+        return "blue";
     };
+    let (hue, saturation) = hue_and_saturation(rgb);
+    if saturation < 0.3 {
+        return "slate";
+    }
+    ADW_ACCENTS
+        .iter()
+        .filter(|(name, _)| *name != "slate")
+        .min_by(|(_, a), (_, b)| {
+            let off = |c: [u8; 3]| {
+                let d = (hue_and_saturation(c).0 - hue).abs();
+                d.min(360.0 - d)
+            };
+            off(*a).total_cmp(&off(*b))
+        })
+        .map(|(name, _)| *name)
+        .unwrap_or("blue")
+}
+
+/// GTK apps (this one included, RavenFileManager, portals) follow
+/// `org.gnome.desktop.interface color-scheme` and `accent-color`; and GTK 3
+/// apps read settings.ini. Set all of them so nothing is left out. "Auto" is
+/// dark, as it is in every Raven app.
+pub fn sync_gtk(cfg: &DesktopConfig) -> Result<()> {
+    let dark = !matches!(cfg.appearance.theme_mode, ThemeMode::Light);
+    let scheme = if dark { "prefer-dark" } else { "prefer-light" };
     if have("gsettings") {
         let _ = run(
             "gsettings",
             &["set", "org.gnome.desktop.interface", "color-scheme", scheme],
         );
+        // The key is new in GNOME 47; an older schema simply lacks it.
+        let _ = run(
+            "gsettings",
+            &[
+                "set",
+                "org.gnome.desktop.interface",
+                "accent-color",
+                adw_accent_name(&cfg.appearance.accent),
+            ],
+        );
     }
-    let dark = matches!(cfg.appearance.theme_mode, ThemeMode::Dark);
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
@@ -815,6 +885,25 @@ mod tests {
         assert_eq!(again, out);
         assert_eq!(comment_start("a = \"x\\\"#y\" # z"), Some(12));
         assert_eq!(comment_start("a = \"#x\""), None);
+    }
+
+    #[test]
+    fn accents_map_to_the_nearest_libadwaita_name() {
+        let names: Vec<_> = crate::config::ACCENTS
+            .iter()
+            .map(|(_, hex)| adw_accent_name(hex))
+            .collect();
+        assert_eq!(
+            names,
+            ["blue", "blue", "teal", "green", "yellow", "red", "purple"]
+        );
+        assert_eq!(adw_accent_name("#E62D42"), "red");
+        assert_eq!(adw_accent_name("#ED5B00"), "orange");
+        assert_eq!(adw_accent_name("#D56199"), "pink");
+        assert_eq!(adw_accent_name("#808890"), "slate");
+        assert_eq!(adw_accent_name("#6F8396"), "slate");
+        assert_eq!(adw_accent_name("red"), "blue");
+        assert_eq!(adw_accent_name("#zzzzzz"), "blue");
     }
 
     #[test]

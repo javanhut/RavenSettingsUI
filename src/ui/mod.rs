@@ -161,6 +161,7 @@ pub fn run() -> glib::ExitCode {
                 cfg.appearance.transparency,
             );
         }
+        theme::watch_desktop();
         window.present();
         if let Ok(size) = std::env::var("RAVEN_SETTINGS_SNAPSHOT_SIZE") {
             if let Some((w, h)) = size.split_once('x') {
