@@ -30,12 +30,16 @@ pub const ACCENTS: [(&str, &str); 7] = [
 /// quick settings, notifications, title bars — as (label, value written to
 /// `appearance.glass_theme`, a word of description). Huginn's
 /// `theme::Theme` reads the values; the first is its default.
-pub const GLASS_THEMES: [(&str, &str, &str); 5] = [
+pub const GLASS_THEMES: [(&str, &str, &str); 9] = [
     ("Black Glass", "black", "Smoked, near-black"),
     ("Fog Glass", "fog", "Soft blue-grey frost"),
     ("Arctic Glass", "arctic", "Pale, icy blue"),
     ("Midnight Glass", "midnight", "Deep navy"),
     ("Rose Glass", "rose", "Dusky rose"),
+    ("Tokyo Neon Glass", "tokyo-neon", "Neon green on black"),
+    ("Clear Glass", "clear", "Barely tinted, see-through"),
+    ("Ember Glass", "ember", "Warm, smoky amber"),
+    ("Nebula Glass", "nebula", "Deep violet"),
 ];
 
 /// The launcher layouts Huginn draws, as (label, value written to

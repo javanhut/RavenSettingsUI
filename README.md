@@ -60,7 +60,7 @@ blur = true
 smooth_animations = true
 animation_speed = "normal"   # slow | normal | fast
 wallpaper = ""               # a still, under ~/.local/share/raven/wallpaper/ (first frame of a live one)
-glass_theme = "black"        # black | fog | arctic | midnight | rose — Huginn's panels
+glass_theme = "black"        # black | fog | arctic | midnight | rose | tokyo-neon | clear | ember | nebula — Huginn's panels
 launcher_layout = "list"     # list (the grid) | arc
 
 [general]

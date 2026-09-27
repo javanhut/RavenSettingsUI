@@ -81,11 +81,35 @@ pub const BASE_CSS: &str = concat!(
 .glass-arctic { background-color: alpha(#4f7f9f, 0.80); }
 .glass-midnight { background-color: alpha(#0e1630, 0.85); }
 .glass-rose { background-color: alpha(#5a3a4e, 0.82); }
+.glass-tokyo-neon {
+  background-color: alpha(#0a1a14, 0.88);
+  border-color: alpha(#39ff9a, 0.55);
+  box-shadow: inset 0 1px 0 alpha(#39ff9a, 0.45), 0 0 8px alpha(#39ff9a, 0.25);
+}
+.glass-clear {
+  background-color: alpha(#1c1f26, 0.30);
+  border-color: alpha(#ffffff, 0.40);
+  box-shadow: inset 0 1px 0 alpha(#ffffff, 0.60);
+}
+.glass-ember { background-color: alpha(#3a2418, 0.82); }
+.glass-nebula { background-color: alpha(#24163a, 0.85); }
 .preview-window.glass-black { background-color: alpha(#16161f, 0.85); }
 .preview-window.glass-fog { background-color: alpha(#6e7d94, 0.72); color: #ffffff; }
 .preview-window.glass-arctic { background-color: alpha(#4f7f9f, 0.72); color: #ffffff; }
 .preview-window.glass-midnight { background-color: alpha(#0e1630, 0.85); color: #e8eeff; }
 .preview-window.glass-rose { background-color: alpha(#5a3a4e, 0.78); color: #fff4f8; }
+.preview-window.glass-tokyo-neon {
+  background-color: alpha(#0a1a14, 0.85); color: #e6fff1;
+  border-color: alpha(#39ff9a, 0.45);
+  box-shadow: inset 0 1px 0 alpha(#39ff9a, 0.40), 0 10px 30px alpha(#000000, 0.40);
+}
+.preview-window.glass-clear {
+  background-color: alpha(#1c1f26, 0.38); color: #ffffff;
+  border-color: alpha(#ffffff, 0.30);
+  box-shadow: inset 0 1px 0 alpha(#ffffff, 0.55), 0 10px 30px alpha(#000000, 0.25);
+}
+.preview-window.glass-ember { background-color: alpha(#3a2418, 0.80); color: #fff3e8; }
+.preview-window.glass-nebula { background-color: alpha(#24163a, 0.85); color: #f3eaff; }
 .signal-bars { font-family: monospace; }
 .wallpaper-thumb { border-radius: 10px; }
 "#
