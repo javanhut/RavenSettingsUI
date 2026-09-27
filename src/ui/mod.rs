@@ -63,6 +63,7 @@ impl App {
             cfg.appearance.theme_mode,
             &cfg.appearance.accent,
             cfg.appearance.transparency,
+            &cfg.appearance.glass_theme,
         );
         if let Err(e) = cfg.save() {
             self.error("Could not save settings", &e);
@@ -148,6 +149,7 @@ pub fn run() -> glib::ExitCode {
                 cfg.appearance.theme_mode,
                 &cfg.appearance.accent,
                 cfg.appearance.transparency,
+                &cfg.appearance.glass_theme,
             );
         }
         let window = window::build(gtk_app, &app, page.as_deref());
@@ -159,6 +161,7 @@ pub fn run() -> glib::ExitCode {
                 cfg.appearance.theme_mode,
                 &cfg.appearance.accent,
                 cfg.appearance.transparency,
+                &cfg.appearance.glass_theme,
             );
         }
         theme::watch_desktop();

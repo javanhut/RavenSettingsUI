@@ -106,8 +106,9 @@ thread_local! {
     static ACCENT_PROVIDER: std::cell::RefCell<Option<gtk::CssProvider>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Point every `@accent_bg_color` at the chosen hex, and set light/dark.
-pub fn apply(mode: ThemeMode, accent: &str, glass: bool) {
+/// Point every `@accent_bg_color` at the chosen hex, set light/dark, and
+/// tint the glass to the chosen glass theme.
+pub fn apply(mode: ThemeMode, accent: &str, glass: bool, glass_theme: &str) {
     if let Some(w) = super::main_window() {
         if glass {
             w.add_css_class("glass");
@@ -128,12 +129,13 @@ pub fn apply(mode: ThemeMode, accent: &str, glass: bool) {
     };
     let light = matches!(mode, ThemeMode::Light);
     let css = format!(
-        "@define-color accent_bg_color {accent};\n@define-color accent_color {accent};\n{}",
+        "@define-color accent_bg_color {accent};\n@define-color accent_color {accent};\n{}{}",
         if light {
             include_str!("../../data/raven-glass-light.css")
         } else {
             ""
-        }
+        },
+        crate::glass_tint::css(glass_theme, light),
     );
     let display = gtk::gdk::Display::default().expect("no display");
     ACCENT_PROVIDER.with(|slot| {
@@ -203,7 +205,7 @@ pub fn watch_desktop() {
         let id = glib::timeout_add_local_once(DESKTOP_SETTLE, move || {
             fired.borrow_mut().take();
             let a = crate::config::DesktopConfig::load().appearance;
-            apply(a.theme_mode, &a.accent, a.transparency);
+            apply(a.theme_mode, &a.accent, a.transparency, &a.glass_theme);
         });
         *pending.borrow_mut() = Some(id);
     });
