@@ -25,8 +25,12 @@ pub fn build(
         .build();
     window.add_css_class("raven");
 
+    // Not horizontally homogeneous: by default a Stack is as wide as its
+    // widest page, so one page that cannot shrink would push every page
+    // past the edge of the window.
     let stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
+        .hhomogeneous(false)
         .hexpand(true)
         .vexpand(true)
         .build();
@@ -143,6 +147,7 @@ pub fn build(
         .propagate_natural_height(false)
         .child(&sidebar)
         .build();
+    sidebar_scroller.add_css_class("sidebar-scroller");
     let split = adw::OverlaySplitView::builder()
         .sidebar(&sidebar_scroller)
         .content(&toolbar)

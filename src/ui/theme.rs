@@ -1,6 +1,7 @@
-//! The look: Raven Glass, the stylesheet shared with Raven Store and Raven
-//! Power (`data/raven-glass.css`), plus the handful of classes only Settings
-//! draws. Accent and light/dark are swapped at runtime by a second provider.
+//! The look: Raven Glass, the stylesheet every Raven app shares (the
+//! raven-glass crate in RavenGUI, read from /usr/share/raven/glass/), plus
+//! the handful of classes only Settings draws. Accent and light/dark are
+//! swapped at runtime by a second provider.
 
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -8,11 +9,9 @@ use libadwaita as adw;
 
 use crate::config::ThemeMode;
 
-/// The shared language first, then what only this app has: the theme and
-/// accent pickers on the Appearance page and their live preview.
-pub const BASE_CSS: &str = concat!(
-    include_str!("../../data/raven-glass.css"),
-    r#"
+/// What only this app has, laid over Raven Glass: the theme and accent
+/// pickers on the Appearance page and their live preview.
+pub const SETTINGS_CSS: &str = r#"
 /* ── Settings-only ───────────────────────────────────────────────────── */
 .theme-choice {
   border-radius: 12px;
@@ -112,12 +111,11 @@ pub const BASE_CSS: &str = concat!(
 .preview-window.glass-nebula { background-color: alpha(#24163a, 0.85); color: #f3eaff; }
 .signal-bars { font-family: monospace; }
 .wallpaper-thumb { border-radius: 10px; }
-"#
-);
+"#;
 
 pub fn load_base() {
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(BASE_CSS);
+    provider.load_from_string(&format!("{}{SETTINGS_CSS}", raven_glass::base_css()));
     let display = gtk::gdk::Display::default().expect("no display");
     gtk::style_context_add_provider_for_display(
         &display,
@@ -155,11 +153,11 @@ pub fn apply(mode: ThemeMode, accent: &str, glass: bool, glass_theme: &str) {
     let css = format!(
         "@define-color accent_bg_color {accent};\n@define-color accent_color {accent};\n{}{}",
         if light {
-            include_str!("../../data/raven-glass-light.css")
+            raven_glass::light_css()
         } else {
             ""
         },
-        crate::glass_tint::css(glass_theme, light),
+        raven_glass::tint::css(glass_theme, light),
     );
     let display = gtk::gdk::Display::default().expect("no display");
     ACCENT_PROVIDER.with(|slot| {

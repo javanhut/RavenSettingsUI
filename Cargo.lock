@@ -1058,6 +1058,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
+name = "raven-glass"
+version = "0.0.1"
+
+[[package]]
 name = "raven-keycast"
 version = "0.1.0"
 dependencies = [
@@ -1081,6 +1085,7 @@ dependencies = [
  "glib",
  "gtk4",
  "libadwaita",
+ "raven-glass",
  "serde",
  "serde_json",
  "toml 0.8.23",

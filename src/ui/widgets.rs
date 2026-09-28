@@ -132,16 +132,35 @@ pub fn segmented(
     bx
 }
 
-/// Two-column grid of cards, as in the mockup. Carries the `columns` class
-/// so [`set_columns_stacked`] can turn it into one column in a narrow pane.
+/// Two-column grid of cards, as in the mockup. The columns sit in a
+/// `FlowBox`, so they fall to one column on their own whenever the pane is
+/// narrower than the two side by side need -- a homogeneous horizontal box
+/// would instead demand twice its widest column and spill past the window.
+/// Carries the `columns` class so [`set_columns_stacked`] can also force one
+/// column in a narrow window.
 pub fn two_columns() -> (gtk::Box, gtk::Box, gtk::Box) {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-    row.add_css_class("columns");
-    row.set_homogeneous(true);
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let flow = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .homogeneous(true)
+        .min_children_per_line(1)
+        .max_children_per_line(2)
+        .column_spacing(16)
+        .row_spacing(16)
+        .hexpand(true)
+        .build();
+    flow.add_css_class("columns");
+    row.append(&flow);
     let left = gtk::Box::new(gtk::Orientation::Vertical, 16);
     let right = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    row.append(&left);
-    row.append(&right);
+    for column in [&left, &right] {
+        column.set_valign(gtk::Align::Start);
+        flow.append(column);
+        // The cell is only a holder; focus belongs to the controls inside.
+        if let Some(cell) = column.parent() {
+            cell.set_focusable(false);
+        }
+    }
     (row, left, right)
 }
 
@@ -200,7 +219,9 @@ pub fn signal_icon(bars: u8) -> &'static str {
 pub fn set_columns_stacked(root: &impl IsA<gtk::Widget>, stacked: bool) {
     fn walk(w: &gtk::Widget, stacked: bool) {
         if w.has_css_class("columns") {
-            if let Some(b) = w.downcast_ref::<gtk::Box>() {
+            if let Some(f) = w.downcast_ref::<gtk::FlowBox>() {
+                f.set_max_children_per_line(if stacked { 1 } else { 2 });
+            } else if let Some(b) = w.downcast_ref::<gtk::Box>() {
                 b.set_orientation(if stacked {
                     gtk::Orientation::Vertical
                 } else {
