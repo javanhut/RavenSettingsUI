@@ -9,7 +9,7 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 
 use crate::backend::network::{self as net, Client, NetworkSummary, PortSummary, SecretKind};
-use crate::ui::{ask_text, main_window, offer_terminal, spawn, widgets, App};
+use crate::ui::{ask_text, confirm, main_window, offer_terminal, spawn, widgets, App};
 
 struct Page {
     status_title: gtk::Label,
@@ -341,50 +341,158 @@ fn show_networks(app: &Rc<App>, page: &Rc<Page>, nets: &[NetworkSummary]) {
         return;
     }
     let current = page.current_ssid.borrow().clone();
-    for n in nets {
-        let hidden = n.ssid.is_empty();
-        let title = if hidden {
-            "Hidden network".to_string()
+    for g in net::group(nets) {
+        let row = if g.hidden() {
+            hidden_row(&g)
         } else {
-            n.ssid.clone()
+            network_row(app, page, &g, current.as_deref() == Some(g.ssid.as_str()))
         };
-        let mut subtitle = format!(
-            "{} · {} · {} dBm",
-            n.security,
-            net::band(n.freq_mhz),
-            n.signal_dbm
-        );
-        if n.known {
-            subtitle.push_str(" · Saved");
-        }
-        let row = adw::ActionRow::builder()
-            .title(glib::markup_escape_text(&title))
-            .subtitle(&subtitle)
-            .build();
-        let icon = gtk::Image::from_icon_name(widgets::signal_icon(net::bars(n.signal_dbm)));
-        row.add_prefix(&icon);
-        if n.security != "Open" && !n.security.is_empty() {
-            let lock = gtk::Image::from_icon_name("channel-secure-symbolic");
-            lock.add_css_class("dim");
-            row.add_suffix(&lock);
-        }
-        if current.as_deref() == Some(n.ssid.as_str()) {
-            let l = gtk::Label::new(Some("Connected"));
-            l.add_css_class("badge");
-            row.add_suffix(&l);
-        } else if !hidden {
-            let b = gtk::Button::with_label("Connect");
-            b.set_valign(gtk::Align::Center);
-            b.add_css_class("flat");
-            let app = app.clone();
-            let page = page.clone();
-            let ssid = n.ssid.clone();
-            b.connect_clicked(move |_| connect_to(&app, &page, &ssid));
-            row.add_suffix(&b);
-            row.set_activatable_widget(Some(&b));
-        }
         page.networks.append(&row);
     }
+}
+
+/// One row per network name. A name served by several access points expands
+/// to list them, since which band and how strong each is can still matter.
+fn network_row(
+    app: &Rc<App>,
+    page: &Rc<Page>,
+    g: &net::NetworkGroup,
+    connected: bool,
+) -> gtk::Widget {
+    let mut subtitle = format!("{} · {} · {} dBm", g.security(), g.bands(), g.signal_dbm());
+    if g.known {
+        subtitle.push_str(" · Saved");
+    }
+    let title = glib::markup_escape_text(&g.ssid);
+    let icon = gtk::Image::from_icon_name(widgets::signal_icon(net::bars(g.signal_dbm())));
+    let lock = (!g.security().is_empty() && g.security() != "Open").then(|| {
+        let lock = gtk::Image::from_icon_name("channel-secure-symbolic");
+        lock.add_css_class("dim");
+        lock
+    });
+
+    let mut suffixes: Vec<gtk::Widget> = Vec::new();
+    if let Some(lock) = lock {
+        suffixes.push(lock.upcast());
+    }
+    if g.known {
+        let b = gtk::Button::with_label("Forget");
+        b.set_valign(gtk::Align::Center);
+        b.add_css_class("flat");
+        let app = app.clone();
+        let page = page.clone();
+        let ssid = g.ssid.clone();
+        b.connect_clicked(move |b| forget(&app, &page, b, &ssid, connected));
+        suffixes.push(b.upcast());
+    }
+    let mut activate: Option<gtk::Button> = None;
+    if connected {
+        let l = gtk::Label::new(Some("Connected"));
+        l.add_css_class("badge");
+        suffixes.push(l.upcast());
+    } else {
+        let b = gtk::Button::with_label("Connect");
+        b.set_valign(gtk::Align::Center);
+        b.add_css_class("flat");
+        let app = app.clone();
+        let page = page.clone();
+        let ssid = g.ssid.clone();
+        b.connect_clicked(move |_| connect_to(&app, &page, &ssid));
+        suffixes.push(b.clone().upcast());
+        activate = Some(b);
+    }
+
+    if g.access_points.len() == 1 {
+        let row = adw::ActionRow::builder().title(title).subtitle(&subtitle).build();
+        row.add_prefix(&icon);
+        for w in &suffixes {
+            row.add_suffix(w);
+        }
+        if let Some(b) = activate {
+            row.set_activatable_widget(Some(&b));
+        }
+        return row.upcast();
+    }
+
+    let row = adw::ExpanderRow::builder().title(title).subtitle(&subtitle).build();
+    row.add_prefix(&icon);
+    for w in &suffixes {
+        row.add_suffix(w);
+    }
+    for ap in &g.access_points {
+        row.add_row(&access_point_row(ap));
+    }
+    row.upcast()
+}
+
+/// Hidden networks share no name, so they cannot be joined from the list and
+/// are gathered under one row rather than each taking a line of their own.
+fn hidden_row(g: &net::NetworkGroup) -> gtk::Widget {
+    let count = g.access_points.len();
+    let title = if count == 1 {
+        "Hidden network".to_string()
+    } else {
+        format!("{count} hidden networks")
+    };
+    let row = adw::ExpanderRow::builder()
+        .title(title)
+        .subtitle("Use “Join hidden network…” with the network’s name")
+        .build();
+    row.add_prefix(&gtk::Image::from_icon_name(widgets::signal_icon(net::bars(
+        g.signal_dbm(),
+    ))));
+    for ap in &g.access_points {
+        row.add_row(&access_point_row(ap));
+    }
+    row.upcast()
+}
+
+fn access_point_row(ap: &NetworkSummary) -> adw::ActionRow {
+    adw::ActionRow::builder()
+        .title(format!("{} · {} dBm", net::band(ap.freq_mhz), ap.signal_dbm))
+        .subtitle(format!("{} · {}", ap.security, ap.bssid))
+        .build()
+}
+
+fn forget(app: &Rc<App>, page: &Rc<Page>, from: &gtk::Button, ssid: &str, connected: bool) {
+    if !net::can_change() {
+        app.toast("This account is not in the caw group, so it cannot forget networks.");
+        return;
+    }
+    let body = if connected {
+        format!("You will be disconnected, and joining {ssid} again will ask for its password.")
+    } else {
+        format!("Joining {ssid} again will ask for its password.")
+    };
+    let app = app.clone();
+    let page = page.clone();
+    let ssid = ssid.to_string();
+    confirm(
+        from,
+        &format!("Forget {ssid}?"),
+        &body,
+        "Forget",
+        true,
+        move |yes| {
+            if !yes {
+                return;
+            }
+            let app2 = app.clone();
+            let page = page.clone();
+            let ssid = ssid.clone();
+            spawn(
+                move || Client::connect().and_then(|mut c| c.forget(&ssid)),
+                move |r| {
+                    match r {
+                        Ok(()) => app2.toast("Network forgotten"),
+                        Err(e) => app2.error("Could not forget the network", &e),
+                    }
+                    // Rescan so the list drops the Saved mark and the button.
+                    refresh(&app2, &page, true);
+                },
+            );
+        },
+    );
 }
 
 fn show_ports(app: &Rc<App>, page: &Rc<Page>, ports: &[PortSummary]) {

@@ -26,6 +26,7 @@ enum Request {
     Scan { port: Option<String> },
     Connect { ssid: String, port: Option<String> },
     Disconnect { ssid: String },
+    Forget { ssid: String },
     Status,
     Secret { token: u64, value: String },
 }
@@ -229,6 +230,12 @@ impl Client {
             .map(|_| ())
     }
 
+    /// Delete a saved network, leaving it first when it is the one joined.
+    pub fn forget(&mut self, ssid: &str) -> Result<()> {
+        self.call(Request::Forget { ssid: ssid.into() })
+            .map(|_| ())
+    }
+
     /// Join a network. `secret` is asked for each credential the daemon
     /// wants (a passphrase; a username and password for enterprise); return
     /// `None` to cancel. `progress` is told each step.
@@ -321,6 +328,83 @@ pub fn wait_until(available: bool, timeout: Duration) -> bool {
     Client::available() == available
 }
 
+/// Every access point broadcasting one network name, shown as one row.
+///
+/// A scan reports each radio separately, so a dual-band router or a mesh
+/// shows up once per band and per node. Joining is by name and cawd picks the
+/// best of them itself, so the list only needs one entry per name.
+#[derive(Debug, Clone)]
+pub struct NetworkGroup {
+    /// Empty for the group of hidden networks, which have no name to share.
+    pub ssid: String,
+    /// Strongest first.
+    pub access_points: Vec<NetworkSummary>,
+    pub known: bool,
+}
+
+impl NetworkGroup {
+    pub fn hidden(&self) -> bool {
+        self.ssid.is_empty()
+    }
+
+    pub fn signal_dbm(&self) -> i32 {
+        self.access_points[0].signal_dbm
+    }
+
+    /// The security modes on offer, strongest access point's first.
+    pub fn security(&self) -> String {
+        let mut seen: Vec<&str> = Vec::new();
+        for ap in &self.access_points {
+            if !ap.security.is_empty() && !seen.contains(&ap.security.as_str()) {
+                seen.push(&ap.security);
+            }
+        }
+        seen.join(" / ")
+    }
+
+    /// The bands on offer, lowest first: "2.4 / 5 GHz".
+    pub fn bands(&self) -> String {
+        let mut bands: Vec<&str> = Vec::new();
+        for b in ["2.4 GHz", "5 GHz", "6 GHz"] {
+            if self.access_points.iter().any(|ap| band(ap.freq_mhz) == b) {
+                bands.push(b);
+            }
+        }
+        match bands.as_slice() {
+            [one] => one.to_string(),
+            many => {
+                let numbers: Vec<&str> = many.iter().map(|b| b.trim_end_matches(" GHz")).collect();
+                format!("{} GHz", numbers.join(" / "))
+            }
+        }
+    }
+}
+
+/// Fold a scan into one group per network name, strongest first, with the
+/// hidden networks gathered last.
+pub fn group(networks: &[NetworkSummary]) -> Vec<NetworkGroup> {
+    let mut groups: Vec<NetworkGroup> = Vec::new();
+    for n in networks {
+        match groups.iter_mut().find(|g| g.ssid == n.ssid) {
+            Some(g) => {
+                g.known |= n.known;
+                g.access_points.push(n.clone());
+            }
+            None => groups.push(NetworkGroup {
+                ssid: n.ssid.clone(),
+                access_points: vec![n.clone()],
+                known: n.known,
+            }),
+        }
+    }
+    for g in &mut groups {
+        g.access_points
+            .sort_by_key(|ap| std::cmp::Reverse(ap.signal_dbm));
+    }
+    groups.sort_by_key(|g| (g.hidden(), std::cmp::Reverse(g.signal_dbm())));
+    groups
+}
+
 /// Signal strength as 0..=4 bars.
 pub fn bars(dbm: i32) -> u8 {
     match dbm {
@@ -378,6 +462,46 @@ mod tests {
         assert!(matches!(d, ServerMessage::Response(Response::Networks(_))));
         let e: ServerMessage = serde_json::from_str(r#""Ok""#).unwrap();
         assert!(matches!(e, ServerMessage::Response(Response::Ok)));
+    }
+
+    fn ap(ssid: &str, freq_mhz: u32, signal_dbm: i32, security: &str, known: bool) -> NetworkSummary {
+        NetworkSummary {
+            ssid: ssid.into(),
+            bssid: format!("{freq_mhz}"),
+            signal_dbm,
+            freq_mhz,
+            security: security.into(),
+            known,
+        }
+    }
+
+    #[test]
+    fn groups_one_row_per_name() {
+        let scan = [
+            ap("", 2437, -40, "WPA2-Personal", false),
+            ap("Home", 2437, -60, "WPA2/WPA3-Personal", false),
+            ap("Cafe", 2412, -50, "Open", false),
+            ap("Home", 5180, -45, "WPA2/WPA3-Personal", true),
+            ap("", 2462, -43, "WPA2-Personal", false),
+        ];
+        let groups = group(&scan);
+        let names: Vec<&str> = groups.iter().map(|g| g.ssid.as_str()).collect();
+        assert_eq!(names, ["Home", "Cafe", ""]);
+        let home = &groups[0];
+        assert!(home.known);
+        assert_eq!(home.signal_dbm(), -45);
+        assert_eq!(home.bands(), "2.4 / 5 GHz");
+        assert_eq!(home.security(), "WPA2/WPA3-Personal");
+        assert_eq!(groups[1].bands(), "2.4 GHz");
+        assert_eq!(groups[2].access_points.len(), 2);
+    }
+
+    #[test]
+    fn forget_wire_form() {
+        assert_eq!(
+            serde_json::to_string(&Request::Forget { ssid: "HomeNet".into() }).unwrap(),
+            r#"{"Forget":{"ssid":"HomeNet"}}"#
+        );
     }
 
     #[test]
